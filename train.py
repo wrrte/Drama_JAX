@@ -65,7 +65,8 @@ def world_model_imagine_data(replay_buffer: ReplayBuffer,
                              world_model: WorldModel, agent: agents.ActorCriticAgent,
                              imagine_batch_size,
                              imagine_context_length, imagine_batch_length,
-                             log_video, logger, global_step):
+                             log_video, logger, global_step,
+                             video_columns=5, video_temporal_length=5):
     '''
     Sample context from replay buffer, then imagine data with world model and agent
     '''
@@ -81,7 +82,8 @@ def world_model_imagine_data(replay_buffer: ReplayBuffer,
             imagine_context_length=imagine_context_length,
             imagine_batch_length=imagine_batch_length,
             log_video=log_video,
-            logger=logger, global_step=global_step
+            logger=logger, global_step=global_step,
+            video_columns=video_columns, video_temporal_length=video_temporal_length
         )
     elif world_model.model == 'Mamba' or world_model.model == 'Mamba2':
          latent, action, old_logits, context_latent, reward_hat, termination_hat = world_model.imagine_data2(
@@ -90,7 +92,8 @@ def world_model_imagine_data(replay_buffer: ReplayBuffer,
             imagine_context_length=imagine_context_length,
             imagine_batch_length=imagine_batch_length,
             log_video=log_video,
-            logger=logger, global_step=global_step
+            logger=logger, global_step=global_step,
+            video_columns=video_columns, video_temporal_length=video_temporal_length
         )
     return latent, action, old_logits, context_latent, sample_reward, sample_termination, reward_hat, termination_hat
 
@@ -252,7 +255,9 @@ def joint_train_world_model_agent(config, logdir,
                 imagine_batch_length=config.JointTrainAgent.ImagineBatchLength,
                 log_video=log_video,
                 logger=logger,
-                global_step=total_steps
+                global_step=total_steps,
+                video_columns=getattr(config.BasicSettings, "VideoColumns", 5),
+                video_temporal_length=getattr(config.BasicSettings, "VideoTemporalLength", 5)
             )
 
             agent.update(
