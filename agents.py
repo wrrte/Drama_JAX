@@ -218,6 +218,43 @@ class ActorCriticAgent(nn.Module):
     def sample_as_env_action(self, latent, greedy=False):
         action, _ = self.sample(latent, greedy)
         return action.detach().cpu().squeeze(-1).numpy()
+
+    def sample_as_env_action_tensor(self, latent, greedy=False):
+        action, _ = self.sample(latent, greedy)
+        return action.squeeze(-1)
+
+    def sample_as_env_action_tensor(self, latent, greedy=False):
+        action, _ = self.sample(latent, greedy)
+        return action.squeeze(-1)
+    def compute_loss(self, latent, action, reward, termination):
+        logits, raw_value = self.get_logits_raw_value(latent)
+        dist = distributions.Categorical(logits=logits[:, :-1])
+        log_prob = dist.log_prob(action)
+        entropy = dist.entropy()
+
+        # decode value, calc lambda return
+        slow_value = self.slow_value(latent)
+        slow_lambda_return = calc_lambda_return(reward, slow_value, termination, self.gamma, self.lambd)
+        value = self.symlog_twohot_loss.decode(raw_value)
+        lambda_return = calc_lambda_return(reward, value, termination, self.gamma, self.lambd)
+
+        # update value function with slow critic regularization
+        value_loss = self.symlog_twohot_loss(raw_value[:, :-1], lambda_return.detach())
+        slow_value_regularization_loss = self.symlog_twohot_loss(raw_value[:, :-1], slow_lambda_return.detach())
+            
+        lower_bound = self.lowerbound_ema(percentile(lambda_return, 0.05))
+        upper_bound = self.upperbound_ema(percentile(lambda_return, 0.95))
+        S = upper_bound-lower_bound
+        norm_ratio = torch.max(torch.ones(1, device=reward.device), S)  # max(1, S) in the paper
+        norm_advantage = (lambda_return-value[:, :-1]) / norm_ratio
+        policy_loss = -(log_prob * norm_advantage.detach()).mean()
+
+        entropy_loss = entropy.mean()
+
+        loss = policy_loss + value_loss + slow_value_regularization_loss - self.entropy_coef * entropy_loss
+        
+        return loss, policy_loss, value_loss, entropy_loss, S, norm_ratio
+
     @profile
     def update(self, latent, action, old_logits, context_latent, context_reward, context_termination, reward, termination, logger, global_step):
         '''
@@ -225,31 +262,7 @@ class ActorCriticAgent(nn.Module):
         '''
         self.train()
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
-            logits, raw_value = self.get_logits_raw_value(latent)
-            dist = distributions.Categorical(logits=logits[:, :-1])
-            log_prob = dist.log_prob(action)
-            entropy = dist.entropy()
-
-            # decode value, calc lambda return
-            slow_value = self.slow_value(latent)
-            slow_lambda_return = calc_lambda_return(reward, slow_value, termination, self.gamma, self.lambd)
-            value = self.symlog_twohot_loss.decode(raw_value)
-            lambda_return = calc_lambda_return(reward, value, termination, self.gamma, self.lambd)
-
-            # update value function with slow critic regularization
-            value_loss = self.symlog_twohot_loss(raw_value[:, :-1], lambda_return.detach())
-            slow_value_regularization_loss = self.symlog_twohot_loss(raw_value[:, :-1], slow_lambda_return.detach())
-                
-            lower_bound = self.lowerbound_ema(percentile(lambda_return, 0.05))
-            upper_bound = self.upperbound_ema(percentile(lambda_return, 0.95))
-            S = upper_bound-lower_bound
-            norm_ratio = torch.max(torch.ones(1, device=reward.device), S)  # max(1, S) in the paper
-            norm_advantage = (lambda_return-value[:, :-1]) / norm_ratio
-            policy_loss = -(log_prob * norm_advantage.detach()).mean()
-
-            entropy_loss = entropy.mean()
-
-            loss = policy_loss + value_loss + slow_value_regularization_loss - self.entropy_coef * entropy_loss
+            loss, policy_loss, value_loss, entropy_loss, S, norm_ratio = self.compute_loss(latent, action, reward, termination)
 
         # gradient descent
         self.scaler.scale(loss).backward()
@@ -412,6 +425,13 @@ class PPOAgent(nn.Module):
         else:
             # Continuous actions: return as numpy array
             return action.detach().cpu().numpy()
+
+    def sample_as_env_action_tensor(self, latent, greedy=False):
+        action, _ = self.sample(latent, greedy)
+        if self.is_discrete:
+            return action.squeeze(-1)
+        else:
+            return action
 
     @profile
     def comput_loss(self, latent, action, logp_old, advs, rtgs, slow_return):

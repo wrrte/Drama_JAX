@@ -1,7 +1,4 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "1"
-os.environ["MUJOCO_GL"] = "osmesa"
-os.environ["PYOPENGL_PLATFORM"] = "osmesa"
 import gymnasium
 import argparse
 import numpy as np
@@ -21,7 +18,7 @@ from line_profiler import profile
 import yaml
 from envs.my_memory_maze import MemoryMaze
 from envs.my_atari import Atari
-from env.my_dmc import DMControl
+from envs.my_dmc import DMControl
 from eval import eval_episodes
 import warnings
 import ast
@@ -124,6 +121,12 @@ def joint_train_world_model_agent(config, logdir,
         is_discrete = False
     else:
         assert ValueError(f'Unknown environment name: {config.BasicSettings.Env_name}')
+    
+    is_discrete = hasattr(env.action_space, 'discrete') and env.action_space.discrete
+    if is_discrete:
+        action_dim = int(env.action_space.n)
+    else:
+        action_dim = int(env.action_space.shape[0])
     print("Current env: " + colorama.Fore.YELLOW + f"{config.BasicSettings.Env_name}" + colorama.Style.RESET_ALL)
 
     # Benchmark handling (only for Atari)
@@ -136,8 +139,9 @@ def joint_train_world_model_agent(config, logdir,
     
     sum_reward = 0
     current_ob, info = env.reset()
-    context_obs = deque(maxlen=config.JointTrainAgent.RealityContextLength)
-    context_action = deque(maxlen=config.JointTrainAgent.RealityContextLength)
+    context_obs_seq = None
+    context_action_seq = None
+    max_context_len = config.JointTrainAgent.RealityContextLength
 
     # sample and train
     for total_steps in tqdm(range(config.JointTrainAgent.SampleMaxSteps // config.JointTrainAgent.NumEnvs), desc='Training'):
@@ -146,36 +150,59 @@ def joint_train_world_model_agent(config, logdir,
             world_model.eval()
             agent.eval()
             with torch.no_grad():
-                if len(context_action) == 0:
-                    action = env.action_space.sample()
+                if context_action_seq is None:
+                    action_numpy = env.action_space.sample()
                 else:
-                    context_latent = world_model.encode_obs(torch.cat(list(context_obs), dim=1).to(world_model.device))
-                    model_context_action = np.stack(list(context_action))
-
-                    # FIXED: Handle both discrete and continuous actions
-                    if is_discrete:
-                        # Discrete: shape is (L,) -> reshape to (1, L)
-                        model_context_action = rearrange(torch.Tensor(model_context_action).to(world_model.device), "L -> 1 L")
-                    else:
-                        # Continuous: shape is (L, A) -> reshape to (1, L, A)
-                        model_context_action = rearrange(torch.Tensor(model_context_action).to(world_model.device), "L A -> 1 L A")
+                    context_latent = world_model.encode_obs(context_obs_seq)
                     
-                    if world_model.model == 'Transformer':
+                    if is_discrete:
+                        model_context_action = rearrange(context_action_seq, "L -> 1 L")
+                    else:
+                        model_context_action = rearrange(context_action_seq, "L A -> 1 L A")
+                    
+                    if world_model.model == 'Transformer' or world_model.model == 'Mamba' or world_model.model == 'Mamba2':
                         prior_flattened_sample, last_dist_feat = world_model.calc_last_dist_feat(context_latent, model_context_action)
-                    elif world_model.model == 'Mamba' or world_model.model == 'Mamba2':
-                        prior_flattened_sample, last_dist_feat = world_model.calc_last_dist_feat(context_latent, model_context_action)
-                    action = agent.sample_as_env_action(
+                        
+                    action_tensor = agent.sample_as_env_action_tensor(
                         torch.cat([prior_flattened_sample, last_dist_feat], dim=-1),
                         greedy=False
                     )[0]
 
-            context_obs.append(rearrange(torch.Tensor(current_ob).to(world_model.device), "H W C -> 1 1 C H W")/255)
-            context_action.append(action)
-        else:
-            action = env.action_space.sample()
+                    if is_discrete:
+                        action_numpy = action_tensor.cpu().item()
+                    else:
+                        action_numpy = action_tensor.cpu().numpy()
 
-        ob, reward, is_last, info = env.step(action)
-        replay_buffer.append(current_ob, action, reward, info['is_terminal'])
+            new_ob = rearrange(torch.Tensor(current_ob).to(world_model.device), "H W C -> 1 1 C H W") / 255.0
+            if context_obs_seq is None:
+                context_obs_seq = new_ob
+            else:
+                context_obs_seq = torch.cat([context_obs_seq, new_ob], dim=1)
+                if context_obs_seq.shape[1] > max_context_len:
+                    context_obs_seq = context_obs_seq[:, 1:]
+            
+            if is_discrete:
+                if context_action_seq is None:
+                    action_tensor_seq = torch.tensor([action_numpy], device=world_model.device, dtype=torch.long)
+                else:
+                    action_tensor_seq = action_tensor.view(1)
+            else:
+                if context_action_seq is None:
+                    action_tensor_seq = torch.tensor(action_numpy, device=world_model.device, dtype=torch.float32).view(1, -1)
+                else:
+                    action_tensor_seq = action_tensor.view(1, -1)
+
+            if context_action_seq is None:
+                context_action_seq = action_tensor_seq
+            else:
+                context_action_seq = torch.cat([context_action_seq, action_tensor_seq], dim=0)
+                if context_action_seq.shape[0] > max_context_len:
+                    context_action_seq = context_action_seq[1:]
+        else:
+            action_numpy = env.action_space.sample()
+
+        ob, reward, is_last, info = env.step(action_numpy)
+        replay_buffer.append(current_ob, action_numpy, reward, info['is_terminal'])
 
         sum_reward += reward
         current_ob = ob
@@ -193,8 +220,8 @@ def joint_train_world_model_agent(config, logdir,
             
             sum_reward = 0
             ob, info = env.reset()
-            context_obs.clear()
-            context_action.clear()
+            context_obs_seq = None
+            context_action_seq = None
 
 
 
@@ -405,8 +432,18 @@ if __name__ == "__main__":
     agent = build_agent(config, action_dim, device=device)
     update_model_parameters(config, world_model, agent)
     if (config.BasicSettings.Compile and os.name != "nt"):  # compilation is not supported on windows
-        world_model = torch.compile(world_model)
-        agent = torch.compile(agent)
+        world_model.compute_loss = torch.compile(world_model.compute_loss, fullgraph=False, dynamic=True)
+        world_model.encode_obs = torch.compile(world_model.encode_obs, fullgraph=True, dynamic=True)
+        world_model.calc_last_dist_feat = torch.compile(world_model.calc_last_dist_feat, fullgraph=False, dynamic=True)
+        world_model.predict_next = torch.compile(world_model.predict_next, fullgraph=False, dynamic=True)
+        world_model.stright_throught_gradient = torch.compile(world_model.stright_throught_gradient, fullgraph=True, dynamic=True)
+        world_model.imagine_data = torch.compile(world_model.imagine_data, fullgraph=False, dynamic=True)
+        if hasattr(agent, 'compute_loss'):
+            agent.compute_loss = torch.compile(agent.compute_loss, fullgraph=False, dynamic=True)
+        elif hasattr(agent, 'comput_loss'):
+            agent.comput_loss = torch.compile(agent.comput_loss, fullgraph=False, dynamic=True)
+        
+        agent.sample_as_env_action_tensor = torch.compile(agent.sample_as_env_action_tensor, fullgraph=False, dynamic=True)
     if config.BasicSettings.SavePath != 'None':
         print('Loading models')
         world_model.load_state_dict(torch.load(f"{config.BasicSettings.SavePath}/world_model.pth"))

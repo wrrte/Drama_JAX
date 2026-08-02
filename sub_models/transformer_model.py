@@ -11,6 +11,7 @@ class StochasticTransformer(nn.Module):
     def __init__(self, stoch_dim, action_dim, feat_dim, num_layers, num_heads, max_length, dropout):
         super().__init__()
         self.action_dim = action_dim
+        self.register_buffer("action_arange", torch.arange(action_dim, dtype=torch.float32), persistent=False)
 
         # mix image_embedding and action
         self.stem = nn.Sequential(
@@ -29,7 +30,7 @@ class StochasticTransformer(nn.Module):
         self.head = nn.Linear(feat_dim, stoch_dim)
 
     def forward(self, samples, action, mask):
-        action = F.one_hot(action.long(), self.action_dim).float()
+        action = (action.long().unsqueeze(-1) == self.action_arange).float()
         feats = self.stem(torch.cat([samples, action], dim=-1))
         feats = self.position_encoding(feats)
         feats = self.layer_norm(feats)
@@ -46,6 +47,7 @@ class StochasticTransformerKVCache(nn.Module):
         super().__init__()
         self.action_dim = action_dim
         self.feat_dim = feat_dim
+        self.register_buffer("action_arange", torch.arange(action_dim, dtype=torch.float32), persistent=False)
 
         # mix image_embedding and action
         self.stem = nn.Sequential(
@@ -65,7 +67,7 @@ class StochasticTransformerKVCache(nn.Module):
         '''
         Normal forward pass
         '''
-        action = F.one_hot(action.long(), self.action_dim).float()
+        action = (action.long().unsqueeze(-1) == self.action_arange).float()
         feats = self.stem(torch.cat([samples, action], dim=-1))
         feats = self.position_encoding(feats)
         feats = self.layer_norm(feats)
@@ -92,7 +94,7 @@ class StochasticTransformerKVCache(nn.Module):
         assert samples.shape[1] == 1
         mask = get_vector_mask(self.kv_cache_list[0].shape[1]+1, samples.device)
 
-        action = F.one_hot(action.long(), self.action_dim).float()
+        action = (action.long().unsqueeze(-1) == self.action_arange).float()
         feats = self.stem(torch.cat([samples, action], dim=-1))
         feats = self.position_encoding.forward_with_position(feats, position=self.kv_cache_list[0].shape[1])
         feats = self.layer_norm(feats)

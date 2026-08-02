@@ -183,6 +183,8 @@ class MixerModel(nn.Module):
         self.feat_dim = d_model
         self.is_discrete = is_discrete
 
+        self.register_buffer("action_arange", torch.arange(action_dim, dtype=torch.float32, device=device), persistent=False)
+
         # self.embedding = nn.Embedding(vocab_size, d_model, **factory_kwargs)
 
         self.stem = nn.Sequential(
@@ -250,7 +252,8 @@ class MixerModel(nn.Module):
         # Handle both discrete and continuous actions
         if self.is_discrete:
             # Discrete actions: shape (B, L) -> one-hot encode to (B, L, A)
-            action = F.one_hot(action.long(), self.action_dim).float()
+            # action = F.one_hot(action.long(), self.action_dim).float()
+            action = (action.long().unsqueeze(-1) == self.action_arange).float()
         else:
             # Continuous actions: should already be (B, L, A)
             action = action.float()
