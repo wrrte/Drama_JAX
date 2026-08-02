@@ -64,36 +64,27 @@ def train_world_model_step(replay_buffer: ReplayBuffer, world_model: WorldModel,
 def world_model_imagine_data(replay_buffer: ReplayBuffer,
                              world_model: WorldModel, agent: agents.ActorCriticAgent,
                              imagine_batch_size,
-                             imagine_context_length, imagine_batch_length,
-                             log_video, logger, global_step,
-                             video_columns=5, video_temporal_length=5):
+                             imagine_context_length, imagine_batch_length):
     '''
     Sample context from replay buffer, then imagine data with world model and agent
     '''
     world_model.eval()
     agent.eval()
-    fetch_future_length = imagine_batch_length if log_video else 0
     sample_obs, sample_action, sample_reward, sample_termination = replay_buffer.sample(
-        imagine_batch_size, imagine_context_length, imagine=True, fetch_future_length=fetch_future_length)
+        imagine_batch_size, imagine_context_length, imagine=True, fetch_future_length=0)
     if world_model.model == 'Transformer':
         latent, action, old_logits, context_latent, reward_hat, termination_hat = world_model.imagine_data(
             agent, sample_obs, sample_action,
             imagine_batch_size=imagine_batch_size,
             imagine_context_length=imagine_context_length,
-            imagine_batch_length=imagine_batch_length,
-            log_video=log_video,
-            logger=logger, global_step=global_step,
-            video_columns=video_columns, video_temporal_length=video_temporal_length
+            imagine_batch_length=imagine_batch_length
         )
     elif world_model.model == 'Mamba' or world_model.model == 'Mamba2':
          latent, action, old_logits, context_latent, reward_hat, termination_hat = world_model.imagine_data2(
             agent, sample_obs, sample_action,
             imagine_batch_size=imagine_batch_size,
             imagine_context_length=imagine_context_length,
-            imagine_batch_length=imagine_batch_length,
-            log_video=log_video,
-            logger=logger, global_step=global_step,
-            video_columns=video_columns, video_temporal_length=video_temporal_length
+            imagine_batch_length=imagine_batch_length
         )
     return latent, action, old_logits, context_latent, sample_reward, sample_termination, reward_hat, termination_hat
 
@@ -246,18 +237,27 @@ def joint_train_world_model_agent(config, logdir,
         if replay_buffer.ready('behaviour') and total_steps % (config.JointTrainAgent.TrainAgentEverySteps // config.JointTrainAgent.NumEnvs) == 0 and total_steps <= config.JointTrainAgent.FreezeBehaviourAfterSteps:
             log_video = total_steps % (config.JointTrainAgent.SaveEverySteps // config.JointTrainAgent.NumEnvs) == 0
 
+            if log_video:
+                video_columns = getattr(config.BasicSettings, "VideoColumns", 5)
+                video_total_length = getattr(config.BasicSettings, "VideoTotalLength", 64)
+                video_temporal_length = getattr(config.BasicSettings, "VideoTemporalLength", 5)
+                imagine_len = config.JointTrainAgent.ImagineBatchLength
+                context_len = max(1, video_total_length - imagine_len)
+                num_videos = video_columns * video_temporal_length
+                
+                openloop_obs, openloop_action, _, _ = replay_buffer.sample(
+                    num_videos, context_len, imagine=True, fetch_future_length=imagine_len)
+                
+                world_model.log_openloop_video(
+                    openloop_obs, openloop_action, context_len, imagine_len, logger, total_steps, video_columns=video_columns)
+
             imagine_latent, agent_action, old_logits, context_latent, context_reward, context_termination, imagine_reward, imagine_termination = world_model_imagine_data(
                 replay_buffer=replay_buffer,
                 world_model=world_model,
                 agent=agent,
                 imagine_batch_size=config.JointTrainAgent.ImagineBatchSize,
                 imagine_context_length=config.JointTrainAgent.ImagineContextLength,
-                imagine_batch_length=config.JointTrainAgent.ImagineBatchLength,
-                log_video=log_video,
-                logger=logger,
-                global_step=total_steps,
-                video_columns=getattr(config.BasicSettings, "VideoColumns", 5),
-                video_temporal_length=getattr(config.BasicSettings, "VideoTemporalLength", 5)
+                imagine_batch_length=config.JointTrainAgent.ImagineBatchLength
             )
 
             agent.update(
