@@ -74,7 +74,7 @@ def eval_episodes(config,
                 else:
                     context_latent = world_model.encode_obs(torch.cat(list(context_obs), dim=1).to(world_model.device))
                     model_context_action = np.stack(list(context_action), axis=1)
-                    model_context_action = torch.as_tensor(model_context_action, device=world_model.device, dtype=world_model.tensor_dtype)
+                    model_context_action = torch.Tensor(model_context_action).to(world_model.device)
                     # current_obs_tensor = rearrange(torch.Tensor(current_obs).to(world_model.device), "B H W C -> B 1 C H W")/255
                     if world_model.model == 'Transformer':
                         prior_flattened_sample, last_dist_feat = world_model.calc_last_dist_feat(context_latent, model_context_action)

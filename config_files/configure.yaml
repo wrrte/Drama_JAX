@@ -27,9 +27,6 @@ JointTrainAgent:
   ImagineBatchSize: 1024
   ImagineContextLength: 8
   ImagineBatchLength: 16
-  VideoColumns: 5
-  VideoTotalLength: 64
-  VideoTemporalLength: 5
   RealityContextLength: 16
   TrainDynamicsEverySteps: 1
   TrainDynamicsEpoch: 1
