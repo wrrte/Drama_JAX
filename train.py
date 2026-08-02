@@ -432,18 +432,24 @@ if __name__ == "__main__":
     agent = build_agent(config, action_dim, device=device)
     update_model_parameters(config, world_model, agent)
     if (config.BasicSettings.Compile and os.name != "nt"):  # compilation is not supported on windows
-        world_model.compute_loss = torch.compile(world_model.compute_loss, fullgraph=False, dynamic=True)
-        world_model.encode_obs = torch.compile(world_model.encode_obs, fullgraph=True, dynamic=True)
-        world_model.calc_last_dist_feat = torch.compile(world_model.calc_last_dist_feat, fullgraph=False, dynamic=True)
-        world_model.predict_next = torch.compile(world_model.predict_next, fullgraph=False, dynamic=True)
-        world_model.stright_throught_gradient = torch.compile(world_model.stright_throught_gradient, fullgraph=True, dynamic=True)
-        world_model.imagine_data = torch.compile(world_model.imagine_data, fullgraph=False, dynamic=True)
-        if hasattr(agent, 'compute_loss'):
-            agent.compute_loss = torch.compile(agent.compute_loss, fullgraph=False, dynamic=True)
-        elif hasattr(agent, 'comput_loss'):
-            agent.comput_loss = torch.compile(agent.comput_loss, fullgraph=False, dynamic=True)
+        world_model.encoder = torch.compile(world_model.encoder, fullgraph=True, dynamic=True)
+        world_model.dist_head.forward_prior = torch.compile(world_model.dist_head.forward_prior, fullgraph=True, dynamic=True)
+        world_model.dist_head.forward_post = torch.compile(world_model.dist_head.forward_post, fullgraph=True, dynamic=True)
+        world_model.image_decoder = torch.compile(world_model.image_decoder, fullgraph=True, dynamic=True)
+        world_model.reward_decoder = torch.compile(world_model.reward_decoder, fullgraph=True, dynamic=True)
+        world_model.termination_decoder = torch.compile(world_model.termination_decoder, fullgraph=True, dynamic=True)
         
-        agent.sample_as_env_action_tensor = torch.compile(agent.sample_as_env_action_tensor, fullgraph=False, dynamic=True)
+        world_model.mse_loss_func = torch.compile(world_model.mse_loss_func, fullgraph=True, dynamic=True)
+        world_model.symlog_twohot_loss_func = torch.compile(world_model.symlog_twohot_loss_func, fullgraph=True, dynamic=True)
+        world_model.categorical_kl_div_loss = torch.compile(world_model.categorical_kl_div_loss, fullgraph=True, dynamic=True)
+        world_model.bce_with_logits_loss_func = torch.compile(world_model.bce_with_logits_loss_func, fullgraph=True, dynamic=True)
+        
+        world_model.stright_throught_gradient = torch.compile(world_model.stright_throught_gradient, fullgraph=True, dynamic=True)
+        
+        # Compile agent modules
+        agent.actor = torch.compile(agent.actor, fullgraph=True, dynamic=True)
+        agent.critic = torch.compile(agent.critic, fullgraph=True, dynamic=True)
+        agent.sample_as_env_action_tensor = torch.compile(agent.sample_as_env_action_tensor, fullgraph=True, dynamic=True)
     if config.BasicSettings.SavePath != 'None':
         print('Loading models')
         world_model.load_state_dict(torch.load(f"{config.BasicSettings.SavePath}/world_model.pth"))

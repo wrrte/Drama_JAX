@@ -116,7 +116,6 @@ class Mamba(nn.Module):
 
         self.out_proj = nn.Linear(self.d_inner, self.d_model, bias=bias, **factory_kwargs)
 
-    @torch.compiler.disable
     def forward(self, hidden_states, inference_params=None):
         """
         hidden_states: (B, L, D)
