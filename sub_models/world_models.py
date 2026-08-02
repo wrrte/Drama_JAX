@@ -482,8 +482,7 @@ class WorldModel(nn.Module):
             self.termination_hat_buffer = torch.zeros(scalar_size, dtype=dtype, device=device)
     @profile
     def imagine_data(self, agent: agents.ActorCriticAgent, full_sample_obs, full_sample_action,
-                     imagine_batch_size, imagine_context_length, imagine_batch_length, log_video, logger, global_step,
-                     video_columns=5, video_temporal_length=5):
+                     imagine_batch_size, imagine_context_length, imagine_batch_length):
         sample_obs = full_sample_obs[:, :imagine_context_length]
         sample_action = full_sample_action[:, :imagine_context_length]
 
@@ -498,7 +497,7 @@ class WorldModel(nn.Module):
             last_obs_hat, last_reward_hat, last_termination_hat, last_latent, last_dist_feat = self.predict_next(
                 context_latent[:, i:i+1],
                 sample_action[:, i:i+1],
-                log_video=log_video
+                log_video=False
             )
         self.sample_buffer[:, 0:1] = last_latent
         self.dist_feat_buffer[:, 0:1] = last_dist_feat
@@ -509,71 +508,17 @@ class WorldModel(nn.Module):
             self.action_buffer[:, i:i+1] = action
 
             last_obs_hat, last_reward_hat, last_termination_hat, last_latent, last_dist_feat = self.predict_next(
-                self.sample_buffer[:, i:i+1], self.action_buffer[:, i:i+1], log_video=log_video)
+                self.sample_buffer[:, i:i+1], self.action_buffer[:, i:i+1], log_video=False)
 
             self.sample_buffer[:, i+1:i+2] = last_latent
             self.dist_feat_buffer[:, i+1:i+2] = last_dist_feat
             self.reward_hat_buffer[:, i:i+1] = last_reward_hat
             self.termination_hat_buffer[:, i:i+1] = last_termination_hat
-            if log_video:
-                obs_hat_list.append(last_obs_hat)
-
-        if log_video:    
-            B = imagine_batch_size
-            num_videos = video_columns * video_temporal_length
-            step = max(1, B // num_videos)
-            idxs = list(range(0, B, step))[:num_videos]
-            
-            true_context = (full_sample_obs[idxs, :imagine_context_length] * 255).clamp(0, 255).byte()
-            T = imagine_batch_length
-            if full_sample_obs.shape[1] > imagine_context_length:
-                true_future = (full_sample_obs[idxs, imagine_context_length:imagine_context_length+T] * 255).clamp(0, 255).byte()
-                if true_future.shape[1] < T:
-                    pad = torch.zeros(true_future.shape[0], T - true_future.shape[1], *true_future.shape[2:], dtype=torch.uint8, device=true_future.device)
-                    true_future = torch.cat([true_future, pad], dim=1)
-            else:
-                true_future = torch.zeros(true_context.shape[0], T, *true_context.shape[2:], dtype=torch.uint8, device=true_context.device)
-
-            with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
-                obs_hat_context = self.image_decoder(context_latent[idxs]) * 255
-            pred_context = obs_hat_context.clamp(0, 255).byte()
-            
-            pred_future = (torch.cat(obs_hat_list, dim=1)[idxs] * 255).clamp(0, 255).byte()
-            
-            error_context = ((pred_context.float() - true_context.float() + 255) / 2).clamp(0, 255).byte()
-            error_future = ((pred_future.float() - true_future.float() + 255) / 2).clamp(0, 255).byte()
-            
-            true_video = torch.cat([true_context, true_future], dim=1)
-            pred_video = torch.cat([pred_context, pred_future], dim=1)
-            error_video = torch.cat([error_context, error_future], dim=1)
-            
-            video = torch.cat([true_video, pred_video, error_video], dim=3)
-            
-            mask = torch.zeros_like(video, dtype=torch.bool)
-            mask[:, :, :, 2:-2, 2:-2] = True
-            border_green = torch.tensor([0, 255, 0], dtype=torch.uint8, device=video.device).view(1, 1, 3, 1, 1)
-            border_red = torch.tensor([255, 0, 0], dtype=torch.uint8, device=video.device).view(1, 1, 3, 1, 1)
-            
-            video[:, :imagine_context_length] = torch.where(mask[:, :imagine_context_length], video[:, :imagine_context_length], border_green)
-            video[:, imagine_context_length:] = torch.where(mask[:, imagine_context_length:], video[:, imagine_context_length:], border_red)
-            
-            N_vids, T_len, C, H, W = video.shape
-            pad_len = (video_columns - N_vids % video_columns) % video_columns
-            if pad_len > 0:
-                pad = torch.zeros(pad_len, T_len, C, H, W, dtype=video.dtype, device=video.device)
-                video = torch.cat([video, pad], dim=0)
-            
-            K = video.shape[0] // video_columns
-            video = video.view(K, video_columns, T_len, C, H, W)
-            grid = video.permute(0, 2, 3, 4, 1, 5).reshape(K * T_len, 3, H, video_columns * W).cpu().numpy()
-            logger.log("report/openloop_video", grid, global_step=global_step)
-
         return torch.cat([self.sample_buffer, self.dist_feat_buffer], dim=-1), self.action_buffer, None, None, self.reward_hat_buffer, self.termination_hat_buffer
 
     @profile
     def imagine_data2(self, agent: agents.ActorCriticAgent, full_sample_obs, full_sample_action,
-                     imagine_batch_size, imagine_context_length, imagine_batch_length, log_video, logger, global_step,
-                     video_columns=5, video_temporal_length=5):
+                     imagine_batch_size, imagine_context_length, imagine_batch_length):
         sample_obs = full_sample_obs[:, :imagine_context_length]
         sample_action = full_sample_action[:, :imagine_context_length]
         self.init_imagine_buffer(imagine_batch_size, imagine_batch_length, dtype=self.tensor_dtype, device=self.device)
@@ -674,56 +619,6 @@ class WorldModel(nn.Module):
             self.termination_hat_buffer = termination_hat_tensor > 0
 
 
-            if log_video:
-                B = imagine_batch_size
-                num_videos = video_columns * video_temporal_length
-                step = max(1, B // num_videos)
-                idxs = list(range(0, B, step))[:num_videos]
-                
-                true_context = (full_sample_obs[idxs, :imagine_context_length] * 255).clamp(0, 255).byte()
-                T = imagine_batch_length
-                if full_sample_obs.shape[1] > imagine_context_length:
-                    true_future = (full_sample_obs[idxs, imagine_context_length:imagine_context_length+T] * 255).clamp(0, 255).byte()
-                    if true_future.shape[1] < T:
-                        pad = torch.zeros(true_future.shape[0], T - true_future.shape[1], *true_future.shape[2:], dtype=torch.uint8, device=true_future.device)
-                        true_future = torch.cat([true_future, pad], dim=1)
-                else:
-                    true_future = torch.zeros(true_context.shape[0], T, *true_context.shape[2:], dtype=torch.uint8, device=true_context.device)
-
-                with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
-                    obs_hat_context = self.image_decoder(context_flattened_sample[idxs]) * 255
-                    obs_hat = self.image_decoder(self.sample_buffer[idxs]) * 255
-                    
-                pred_context = obs_hat_context.clamp(0, 255).byte()
-                pred_future = obs_hat[:, 1:].clamp(0, 255).byte()
-                
-                error_context = ((pred_context.float() - true_context.float() + 255) / 2).clamp(0, 255).byte()
-                error_future = ((pred_future.float() - true_future.float() + 255) / 2).clamp(0, 255).byte()
-                
-                true_video = torch.cat([true_context, true_future], dim=1)
-                pred_video = torch.cat([pred_context, pred_future], dim=1)
-                error_video = torch.cat([error_context, error_future], dim=1)
-                
-                video = torch.cat([true_video, pred_video, error_video], dim=3)
-                
-                mask = torch.zeros_like(video, dtype=torch.bool)
-                mask[:, :, :, 2:-2, 2:-2] = True
-                border_green = torch.tensor([0, 255, 0], dtype=torch.uint8, device=video.device).view(1, 1, 3, 1, 1)
-                border_red = torch.tensor([255, 0, 0], dtype=torch.uint8, device=video.device).view(1, 1, 3, 1, 1)
-                
-                video[:, :imagine_context_length] = torch.where(mask[:, :imagine_context_length], video[:, :imagine_context_length], border_green)
-                video[:, imagine_context_length:] = torch.where(mask[:, imagine_context_length:], video[:, imagine_context_length:], border_red)
-                
-                N_vids, T_len, C, H, W = video.shape
-                pad_len = (video_columns - N_vids % video_columns) % video_columns
-                if pad_len > 0:
-                    pad = torch.zeros(pad_len, T_len, C, H, W, dtype=video.dtype, device=video.device)
-                    video = torch.cat([video, pad], dim=0)
-                
-                K = video.shape[0] // video_columns
-                video = video.view(K, video_columns, T_len, C, H, W)
-                grid = video.permute(0, 2, 3, 4, 1, 5).reshape(K * T_len, 3, H, video_columns * W).cpu().numpy()
-                logger.log("report/openloop_video", grid, global_step=global_step)
         return torch.cat([self.sample_buffer, self.dist_feat_buffer], dim=-1), self.action_buffer, old_logits_tensor, torch.cat([context_flattened_sample, context_dist_feat], dim=-1), self.reward_hat_buffer, self.termination_hat_buffer
 
 
@@ -800,3 +695,112 @@ class WorldModel(nn.Module):
         return  reconstruction_loss.item(), reward_loss.item(), termination_loss.item(), \
                 dynamics_loss.item(), dynamics_real_kl_div.item(), representation_loss.item(), \
                 representation_real_kl_div.item(), total_loss.item()
+
+    @torch.no_grad()
+    @profile
+    def log_openloop_video(self, sample_obs, sample_action, context_length, imagine_length, logger, global_step, video_columns=5):
+        B = sample_obs.shape[0]
+        T_total = context_length + imagine_length
+        
+        true_context = (sample_obs[:, :context_length] * 255).clamp(0, 255).byte()
+        true_future = (sample_obs[:, context_length:T_total] * 255).clamp(0, 255).byte()
+        
+        context_latent = self.encode_obs(sample_obs[:, :context_length])
+        
+        if self.model == 'Transformer':
+            self.sequence_model.reset_kv_cache_list(B, dtype=self.tensor_dtype)
+            
+            for i in range(context_length):
+                last_obs_hat, _, _, last_latent, last_dist_feat = self.predict_next(
+                    context_latent[:, i:i+1], sample_action[:, i:i+1], log_video=False)
+            
+            curr_latent = last_latent
+            obs_hat_list = []
+            for i in range(context_length, T_total):
+                last_obs_hat, _, _, last_latent, last_dist_feat = self.predict_next(
+                    curr_latent, sample_action[:, i:i+1], log_video=True)
+                curr_latent = last_latent
+                obs_hat_list.append(last_obs_hat)
+                
+            with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
+                obs_hat_context = self.image_decoder(context_latent) * 255
+            
+        elif self.model in ['Mamba', 'Mamba2']:
+            batch_size, seqlen_og, embedding_dim = context_latent.shape
+            max_length = context_length + imagine_length
+            
+            if self.use_cg:
+                if not hasattr(self.sequence_model, "_decoding_cache"):
+                    self.sequence_model._decoding_cache = None
+                self.sequence_model._decoding_cache = update_graph_cache(
+                    self.sequence_model, self.sequence_model._decoding_cache,
+                    B, seqlen_og, max_length, embedding_dim,
+                )
+                inference_params = self.sequence_model._decoding_cache.inference_params
+                with torch.inference_mode():
+                    inference_params.reset(max_length, B)
+            else:
+                inference_params = InferenceParams(max_seqlen=max_length, max_batch_size=B, key_value_dtype=torch.bfloat16 if self.use_amp else None)
+            
+            def get_hidden_state(samples, action, inference_params):
+                decoding = inference_params.seqlen_offset > 0
+                if not self.use_cg or not decoding:
+                    return self.sequence_model(samples, action, inference_params=inference_params)
+                else:
+                    return self.sequence_model._decoding_cache.run(samples, action, inference_params.seqlen_offset)
+                    
+            with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp and not self.use_cg):
+                with torch.inference_mode():
+                    context_dist_feat = get_hidden_state(context_latent, sample_action[:, :context_length], inference_params)
+                inference_params.seqlen_offset += context_length
+                
+                context_prior_logits = self.dist_head.forward_prior(context_dist_feat)
+                context_prior_sample = self.stright_throught_gradient(context_prior_logits)
+                curr_sample = self.flatten_sample(context_prior_sample)[:, -1:]
+                
+                obs_hat_context = self.image_decoder(self.flatten_sample(context_prior_sample)) * 255
+                
+                obs_hat_list = []
+                for i in range(context_length, T_total):
+                    with torch.inference_mode():
+                        dist_feat = get_hidden_state(curr_sample, sample_action[:, i:i+1], inference_params)
+                    inference_params.seqlen_offset += 1
+                    
+                    prior_logits = self.dist_head.forward_prior(dist_feat)
+                    prior_sample = self.stright_throught_gradient(prior_logits)
+                    curr_sample = self.flatten_sample(prior_sample)
+                    
+                    obs_hat = self.image_decoder(curr_sample) * 255
+                    obs_hat_list.append(obs_hat)
+                    
+        pred_context = obs_hat_context.clamp(0, 255).byte()
+        pred_future = torch.cat(obs_hat_list, dim=1).clamp(0, 255).byte() if self.model in ['Mamba', 'Mamba2'] else (torch.cat(obs_hat_list, dim=1) * 255).clamp(0, 255).byte()
+        
+        error_context = ((pred_context.float() - true_context.float() + 255) / 2).clamp(0, 255).byte()
+        error_future = ((pred_future.float() - true_future.float() + 255) / 2).clamp(0, 255).byte()
+        
+        true_video = torch.cat([true_context, true_future], dim=1)
+        pred_video = torch.cat([pred_context, pred_future], dim=1)
+        error_video = torch.cat([error_context, error_future], dim=1)
+        
+        video = torch.cat([true_video, pred_video, error_video], dim=3)
+        
+        mask = torch.zeros_like(video, dtype=torch.bool)
+        mask[:, :, :, 2:-2, 2:-2] = True
+        border_green = torch.tensor([0, 255, 0], dtype=torch.uint8, device=video.device).view(1, 1, 3, 1, 1)
+        border_red = torch.tensor([255, 0, 0], dtype=torch.uint8, device=video.device).view(1, 1, 3, 1, 1)
+        
+        video[:, :context_length] = torch.where(mask[:, :context_length], video[:, :context_length], border_green)
+        video[:, context_length:] = torch.where(mask[:, context_length:], video[:, context_length:], border_red)
+        
+        N_vids, T_len, C, H, W = video.shape
+        pad_len = (video_columns - N_vids % video_columns) % video_columns
+        if pad_len > 0:
+            pad = torch.zeros(pad_len, T_len, C, H, W, dtype=video.dtype, device=video.device)
+            video = torch.cat([video, pad], dim=0)
+            
+        K = video.shape[0] // video_columns
+        video = video.view(K, video_columns, T_len, C, H, W)
+        grid = video.permute(0, 2, 3, 4, 1, 5).reshape(K * T_len, 3, H, video_columns * W).cpu().numpy()
+        logger.log("report/openloop_video", grid, global_step=global_step)
+
