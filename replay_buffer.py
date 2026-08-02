@@ -52,7 +52,7 @@ class ReplayBuffer():
         return self.length  > self.world_model_warmup_length if model_name == 'world_model' else self.length  > self.behaviour_warmup_length
 
     @torch.no_grad()
-    def sample(self, batch_size, batch_length, imagine=False):
+    def sample(self, batch_size, batch_length, imagine=False, fetch_future_length=0):
         if self.store_on_gpu:
             obs_list, action_list, reward_list, termination_list = [], [], [], []
             counts = self.sampled_counter[:self.length + 1 - batch_length]
@@ -74,7 +74,8 @@ class ReplayBuffer():
             else:
                 self.imagined_counter[start_indexes] += 1
 
-            indexes = start_indexes.unsqueeze(-1).to(self.device) + torch.arange(batch_length, device=self.device)
+            indexes = start_indexes.unsqueeze(-1).to(self.device) + torch.arange(batch_length + fetch_future_length, device=self.device)
+            indexes = torch.clamp(indexes, max=self.length - 1)
             
             obs_list.append(self.obs_buffer[indexes])
             action_list.append(self.action_buffer[indexes])
@@ -111,7 +112,8 @@ class ReplayBuffer():
                 else:
                     self.imagined_counter[start_indexes] += 1 
 
-                indexes = start_indexes[:, np.newaxis] + np.arange(batch_length)
+                indexes = start_indexes[:, np.newaxis] + np.arange(batch_length + fetch_future_length)
+                indexes = np.clip(indexes, 0, self.length - 1)
 
                 obs_seq = self.obs_buffer[indexes]
                 action_seq = self.action_buffer[indexes]

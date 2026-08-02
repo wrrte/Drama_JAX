@@ -71,12 +71,14 @@ def world_model_imagine_data(replay_buffer: ReplayBuffer,
     '''
     world_model.eval()
     agent.eval()
+    fetch_future_length = imagine_batch_length if log_video else 0
     sample_obs, sample_action, sample_reward, sample_termination = replay_buffer.sample(
-        imagine_batch_size, imagine_context_length, imagine=True)
+        imagine_batch_size, imagine_context_length, imagine=True, fetch_future_length=fetch_future_length)
     if world_model.model == 'Transformer':
         latent, action, old_logits, context_latent, reward_hat, termination_hat = world_model.imagine_data(
             agent, sample_obs, sample_action,
             imagine_batch_size=imagine_batch_size,
+            imagine_context_length=imagine_context_length,
             imagine_batch_length=imagine_batch_length,
             log_video=log_video,
             logger=logger, global_step=global_step
@@ -85,6 +87,7 @@ def world_model_imagine_data(replay_buffer: ReplayBuffer,
          latent, action, old_logits, context_latent, reward_hat, termination_hat = world_model.imagine_data2(
             agent, sample_obs, sample_action,
             imagine_batch_size=imagine_batch_size,
+            imagine_context_length=imagine_context_length,
             imagine_batch_length=imagine_batch_length,
             log_video=log_video,
             logger=logger, global_step=global_step
