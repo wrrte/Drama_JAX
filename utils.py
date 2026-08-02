@@ -73,7 +73,29 @@ class WandbLogger:
         # Log data based on the type
         if "video" in tag:
             # Log video
-            wandb.log({tag: wandb.Video(value, fps=1, format='gif')}, step=global_step)
+            wandb.log({tag: wandb.Video(value, fps=20, format='mp4')}, step=global_step)
+            
+            # Local MP4 Saving (DreamerV3 style)
+            if hasattr(self, 'logdir') and self.logdir:
+                try:
+                    import imageio
+                    import numpy as np
+                    import os
+                    
+                    vid = np.transpose(value, (0, 2, 3, 1))
+                    if vid.dtype != np.uint8:
+                        vid = (255 * np.clip(vid, 0, 1)).astype(np.uint8)
+                    
+                    scale = max(1, int(np.round(512 / vid.shape[1])))
+                    if scale > 1:
+                        vid = np.repeat(np.repeat(vid, scale, axis=1), scale, axis=2)
+                        
+                    safe_name = tag.replace('/', '_')
+                    filename = os.path.join(self.logdir, f"{global_step}_{safe_name}.mp4")
+                    os.makedirs(self.logdir, exist_ok=True)
+                    imageio.mimsave(filename, vid, fps=20, macro_block_size=1, quality=10, pixelformat='yuv444p')
+                except Exception as e:
+                    print(f"Failed to save video locally: {e}")
         elif "images" in tag:
             # Log images
             images = [wandb.Image(img) for img in value]  # Convert each image to a wandb.Image

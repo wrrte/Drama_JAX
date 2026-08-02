@@ -481,9 +481,10 @@ class WorldModel(nn.Module):
             self.reward_hat_buffer = torch.zeros(scalar_size, dtype=dtype, device=device)
             self.termination_hat_buffer = torch.zeros(scalar_size, dtype=dtype, device=device)
     @profile
-    def imagine_data(self, agent: agents.ActorCriticAgent, full_sample_obs, sample_action,
+    def imagine_data(self, agent: agents.ActorCriticAgent, full_sample_obs, full_sample_action,
                      imagine_batch_size, imagine_context_length, imagine_batch_length, log_video, logger, global_step):
         sample_obs = full_sample_obs[:, :imagine_context_length]
+        sample_action = full_sample_action[:, :imagine_context_length]
 
         self.init_imagine_buffer(imagine_batch_size, imagine_batch_length, dtype=self.tensor_dtype, device=self.device)
         self.sequence_model.reset_kv_cache_list(imagine_batch_size, dtype=self.tensor_dtype)
@@ -555,14 +556,15 @@ class WorldModel(nn.Module):
             
             B_idx, T_len, C, H, W = video.shape
             grid = video.permute(1, 2, 3, 0, 4).reshape(T_len, 3, H, B_idx * W).cpu().numpy()
-            logger.log("report/openloop/image", grid, global_step=global_step)
+            logger.log("report/openloop_video", grid, global_step=global_step)
 
         return torch.cat([self.sample_buffer, self.dist_feat_buffer], dim=-1), self.action_buffer, None, None, self.reward_hat_buffer, self.termination_hat_buffer
 
     @profile
-    def imagine_data2(self, agent: agents.ActorCriticAgent, full_sample_obs, sample_action,
+    def imagine_data2(self, agent: agents.ActorCriticAgent, full_sample_obs, full_sample_action,
                      imagine_batch_size, imagine_context_length, imagine_batch_length, log_video, logger, global_step):
         sample_obs = full_sample_obs[:, :imagine_context_length]
+        sample_action = full_sample_action[:, :imagine_context_length]
         self.init_imagine_buffer(imagine_batch_size, imagine_batch_length, dtype=self.tensor_dtype, device=self.device)
         # context
         context_latent = self.encode_obs(sample_obs)
@@ -701,7 +703,7 @@ class WorldModel(nn.Module):
                 
                 B_idx, T_len, C, H, W = video.shape
                 grid = video.permute(1, 2, 3, 0, 4).reshape(T_len, 3, H, B_idx * W).cpu().numpy()
-                logger.log("report/openloop/image", grid, global_step=global_step)
+                logger.log("report/openloop_video", grid, global_step=global_step)
         return torch.cat([self.sample_buffer, self.dist_feat_buffer], dim=-1), self.action_buffer, old_logits_tensor, torch.cat([context_flattened_sample, context_dist_feat], dim=-1), self.reward_hat_buffer, self.termination_hat_buffer
 
 

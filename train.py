@@ -460,7 +460,7 @@ if __name__ == "__main__":
    
     logger = WandbLogger(config=config, project=config.Wandb.Init.Project, mode=config.Wandb.Init.Mode)
     logdir = f"./saved_models/{config.n}/{config.BasicSettings.Env_name}/{logger.run.id}"
-
+    logger.logdir = logdir
     # build replay buffer
     replay_buffer = ReplayBuffer(
         config,
