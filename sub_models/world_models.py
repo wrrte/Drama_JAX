@@ -800,7 +800,7 @@ class WorldModel(nn.Module):
             video = torch.cat([video, pad], dim=0)
             
         K = video.shape[0] // video_columns
-        video = video.view(K, video_columns, T_len, C, H, W)
+        video = video.view(K, video_columns, T_len, C, H, W).to(torch.uint8)
         grid = video.permute(0, 2, 3, 4, 1, 5).reshape(K * T_len, 3, H, video_columns * W).cpu().numpy()
         logger.log("report/openloop_video", grid, global_step=global_step)
 
