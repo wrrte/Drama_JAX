@@ -49,10 +49,17 @@ class WandbLogger:
         """
         # Initialize a W&B run with the given project and path as the run name
         pure_env_name = config.BasicSettings.Env_name.split('/')[-1].split('-')[0]
-        run_name = f"{config.Models.WorldModel.Backbone}_{config.Models.Agent.Policy}_{pure_env_name}_seed{config.BasicSettings.Seed}"
+        run_id = wandb.util.generate_id()
+        run_name = f"{pure_env_name}_{run_id}"
         # Initialize wandb with the complete name (including run ID will be auto-appended by wandb)
-        self.run = wandb.init(project=project, config=config, mode=mode, name=run_name)
-        # self.run.name = f"{self.run.name}_{self.run.id}"
+        api_key_path = os.path.join(os.path.dirname(__file__), '.wandb_api_key')
+        try:
+            with open(api_key_path, 'r') as f:
+                wandb.login(key=f.read().strip())
+        except FileNotFoundError:
+            pass
+
+        self.run = wandb.init(project=project, config=config, mode=mode, name=run_name, id=run_id)
         self.tag_step = {}
 
     def log(self, tag, value, global_step):
