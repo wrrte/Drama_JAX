@@ -482,7 +482,8 @@ class WorldModel(nn.Module):
             self.termination_hat_buffer = torch.zeros(scalar_size, dtype=dtype, device=device)
     @profile
     def imagine_data(self, agent: agents.ActorCriticAgent, full_sample_obs, full_sample_action,
-                     imagine_batch_size, imagine_context_length, imagine_batch_length, log_video, logger, global_step):
+                     imagine_batch_size, imagine_context_length, imagine_batch_length, log_video, logger, global_step,
+                     video_columns=5, video_temporal_length=5):
         sample_obs = full_sample_obs[:, :imagine_context_length]
         sample_action = full_sample_action[:, :imagine_context_length]
 
@@ -519,7 +520,9 @@ class WorldModel(nn.Module):
 
         if log_video:    
             B = imagine_batch_size
-            idxs = slice(0, B, max(1, B//4))
+            num_videos = video_columns * video_temporal_length
+            step = max(1, B // num_videos)
+            idxs = list(range(0, B, step))[:num_videos]
             
             true_context = (full_sample_obs[idxs, :imagine_context_length] * 255).clamp(0, 255).byte()
             T = imagine_batch_length
@@ -554,15 +557,23 @@ class WorldModel(nn.Module):
             video[:, :imagine_context_length] = torch.where(mask[:, :imagine_context_length], video[:, :imagine_context_length], border_green)
             video[:, imagine_context_length:] = torch.where(mask[:, imagine_context_length:], video[:, imagine_context_length:], border_red)
             
-            B_idx, T_len, C, H, W = video.shape
-            grid = video.permute(1, 2, 3, 0, 4).reshape(T_len, 3, H, B_idx * W).cpu().numpy()
+            N_vids, T_len, C, H, W = video.shape
+            pad_len = (video_columns - N_vids % video_columns) % video_columns
+            if pad_len > 0:
+                pad = torch.zeros(pad_len, T_len, C, H, W, dtype=video.dtype, device=video.device)
+                video = torch.cat([video, pad], dim=0)
+            
+            K = video.shape[0] // video_columns
+            video = video.view(K, video_columns, T_len, C, H, W)
+            grid = video.permute(0, 2, 3, 4, 1, 5).reshape(K * T_len, 3, H, video_columns * W).cpu().numpy()
             logger.log("report/openloop_video", grid, global_step=global_step)
 
         return torch.cat([self.sample_buffer, self.dist_feat_buffer], dim=-1), self.action_buffer, None, None, self.reward_hat_buffer, self.termination_hat_buffer
 
     @profile
     def imagine_data2(self, agent: agents.ActorCriticAgent, full_sample_obs, full_sample_action,
-                     imagine_batch_size, imagine_context_length, imagine_batch_length, log_video, logger, global_step):
+                     imagine_batch_size, imagine_context_length, imagine_batch_length, log_video, logger, global_step,
+                     video_columns=5, video_temporal_length=5):
         sample_obs = full_sample_obs[:, :imagine_context_length]
         sample_action = full_sample_action[:, :imagine_context_length]
         self.init_imagine_buffer(imagine_batch_size, imagine_batch_length, dtype=self.tensor_dtype, device=self.device)
@@ -665,7 +676,9 @@ class WorldModel(nn.Module):
 
             if log_video:
                 B = imagine_batch_size
-                idxs = slice(0, B, max(1, B//4))
+                num_videos = video_columns * video_temporal_length
+                step = max(1, B // num_videos)
+                idxs = list(range(0, B, step))[:num_videos]
                 
                 true_context = (full_sample_obs[idxs, :imagine_context_length] * 255).clamp(0, 255).byte()
                 T = imagine_batch_length
@@ -701,8 +714,15 @@ class WorldModel(nn.Module):
                 video[:, :imagine_context_length] = torch.where(mask[:, :imagine_context_length], video[:, :imagine_context_length], border_green)
                 video[:, imagine_context_length:] = torch.where(mask[:, imagine_context_length:], video[:, imagine_context_length:], border_red)
                 
-                B_idx, T_len, C, H, W = video.shape
-                grid = video.permute(1, 2, 3, 0, 4).reshape(T_len, 3, H, B_idx * W).cpu().numpy()
+                N_vids, T_len, C, H, W = video.shape
+                pad_len = (video_columns - N_vids % video_columns) % video_columns
+                if pad_len > 0:
+                    pad = torch.zeros(pad_len, T_len, C, H, W, dtype=video.dtype, device=video.device)
+                    video = torch.cat([video, pad], dim=0)
+                
+                K = video.shape[0] // video_columns
+                video = video.view(K, video_columns, T_len, C, H, W)
+                grid = video.permute(0, 2, 3, 4, 1, 5).reshape(K * T_len, 3, H, video_columns * W).cpu().numpy()
                 logger.log("report/openloop_video", grid, global_step=global_step)
         return torch.cat([self.sample_buffer, self.dist_feat_buffer], dim=-1), self.action_buffer, old_logits_tensor, torch.cat([context_flattened_sample, context_dist_feat], dim=-1), self.reward_hat_buffer, self.termination_hat_buffer
 
