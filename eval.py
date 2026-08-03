@@ -64,8 +64,13 @@ def eval_episodes(config,
     score_table = {"episode": [], "evaluate/score": [], "evaluate/normalised_score": []}
     for algorithm in game_benchmark_df.index[2:]:
         score_table[f"evaluate/normalised_{algorithm}_score"] = []
+        
+    video_writer = cv2.VideoWriter("eval_video.mp4", cv2.VideoWriter_fourcc(*'mp4v'), 15, (640, 640))
     with tqdm(total=config.Evaluate.EpisodeNum, desc="Evaluating episodes") as episode_pbar:
         while True:
+            frame = process_visualize(current_obs[0])
+            video_writer.write(frame)
+                
             with torch.no_grad():
                 if len(context_action) == 0:
                     action = vec_env.action_space.sample()
@@ -123,10 +128,18 @@ def eval_episodes(config,
                         episode_idx += 1
                         episode_pbar.update(1)  # Update the episode progress bar
                         if episode_idx == config.Evaluate.EpisodeNum:
-                            # print("Mean reward: " + colorama.Fore.YELLOW + f"{np.mean(score_table['evaluate/score'])}" + colorama.Style.RESET_ALL)
+                            video_writer.release()
+                            print("\n[Video Saved] 'eval_video.mp4' has been saved locally.")
+                            print("\n" + "="*50)
+                            print(colorama.Fore.GREEN + "Evaluation Results (10 Episodes):" + colorama.Style.RESET_ALL)
                             for key, value in score_table.items():
                                 if key != 'episode' and not np.array(value).any() == None:
-                                    logger.log(key, np.mean(value), global_step=global_step)
+                                    mean_val = np.mean(value)
+                                    logger.log(key, mean_val, global_step=global_step)
+                                    if "normalised" in key:
+                                        scores_str = ", ".join([f"{v:.4f}" for v in value])
+                                        print(colorama.Fore.CYAN + f"{key}: " + colorama.Fore.YELLOW + f"[{scores_str}] (Mean: {mean_val:.4f})" + colorama.Style.RESET_ALL)
+                            print("="*50 + "\n")
                             return score_table
 
 
@@ -167,16 +180,21 @@ if __name__ == "__main__":
     agent = build_agent(config, action_dim, device=device)
     config.update_or_create('Models.Agent.ActorParamNum', sum([p.numel() for p in agent.actor.parameters()]))
     config.update_or_create('Models.Agent.CriticParamNum', sum([p.numel() for p in agent.critic.parameters()]))
+    if config.BasicSettings.SavePath != 'None':
+        print('Loading models')
+        world_model_state = torch.load(f"{config.BasicSettings.SavePath}/world_model.pth")
+        world_model_state = {k.replace('_orig_mod.', ''): v for k, v in world_model_state.items()}
+        world_model.load_state_dict(world_model_state)
+        
+        agent_state = torch.load(f"{config.BasicSettings.SavePath}/agent.pth")
+        agent_state = {k.replace('_orig_mod.', ''): v for k, v in agent_state.items()}
+        agent.load_state_dict(agent_state)
+
     if (config.BasicSettings.Compile and os.name != "nt"):  # compilation is not supported on windows
         world_model = torch.compile(world_model)
         agent = torch.compile(agent)
     logger = WandbLogger(config=config, project=config.Wandb.Init.Project, mode=config.Wandb.Init.Mode)
     logdir = logger.run.dir
-
-    if config.BasicSettings.SavePath != 'None':
-        print('Loading models')
-        world_model.load_state_dict(torch.load(f"{config.BasicSettings.SavePath}/world_model.pth"))
-        agent.load_state_dict(torch.load(f"{config.BasicSettings.SavePath}/agent.pth"))
     
     scores_table = eval_episodes(
         config, world_model=world_model, agent=agent, logger=logger)

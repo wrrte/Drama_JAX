@@ -826,7 +826,7 @@ class MambaSplitConv1dScanCombinedFn(torch.autograd.Function):
         ctx.outproj_weight_dtype = outproj_weight.dtype if outproj_weight is not None else None
         if outproj_weight is not None:
             if torch.is_autocast_enabled():
-                dtype = torch.get_autocast_gpu_dtype()
+                dtype = torch.get_autocast_dtype('cuda')
                 out, outproj_weight = out.to(dtype), outproj_weight.to(dtype)
                 outproj_bias = outproj_bias.to(dtype) if outproj_bias is not None else None
             out = F.linear(out, outproj_weight, outproj_bias)
