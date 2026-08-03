@@ -9,6 +9,7 @@ BasicSettings:
   Use_cg: True
   Compile: True
   SavePath: None
+  Noops: 30
 
 Evaluate:
    EpisodeNum: 10

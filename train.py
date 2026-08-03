@@ -97,7 +97,7 @@ def joint_train_world_model_agent(config, logdir,
 
 
     if config.BasicSettings.Env_name.startswith('ALE'):
-        env = Atari(config.BasicSettings.Env_name, size=config.BasicSettings.ImageSize, seed=config.BasicSettings.Seed)
+        env = Atari(config.BasicSettings.Env_name, size=config.BasicSettings.ImageSize, seed=config.BasicSettings.Seed, noops=getattr(config.BasicSettings, 'Noops', 0))
     elif config.BasicSettings.Env_name.startswith('memory'):
         env = MemoryMaze(config.BasicSettings.Env_name, size=config.BasicSettings.ImageSize, seed=config.BasicSettings.Seed)
     elif config.BasicSettings.Env_name.startswith('dm_'):
