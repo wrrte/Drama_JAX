@@ -21,7 +21,7 @@ import pandas as pd
 def process_visualize(img):
     img = img.astype('uint8')
     img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-    img = cv2.resize(img, (640, 640))
+    img = cv2.resize(img, (640, 640), interpolation=cv2.INTER_NEAREST)
     return img
 
 
@@ -65,11 +65,17 @@ def eval_episodes(config,
     for algorithm in game_benchmark_df.index[2:]:
         score_table[f"evaluate/normalised_{algorithm}_score"] = []
         
-    video_writer = cv2.VideoWriter("eval_video.mp4", cv2.VideoWriter_fourcc(*'mp4v'), 15, (640, 640))
+    current_reward_0 = 0.0
+    video_writer = cv2.VideoWriter("eval_video.mp4", cv2.VideoWriter_fourcc(*'mp4v'), 15, (960, 640))
     with tqdm(total=config.Evaluate.EpisodeNum, desc="Evaluating episodes") as episode_pbar:
         while True:
             frame = process_visualize(current_obs[0])
-            video_writer.write(frame)
+            full_frame = np.zeros((640, 960, 3), dtype=np.uint8)
+            full_frame[:, :640] = frame
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            cv2.putText(full_frame, f"Step Score: {current_reward_0:.1f}", (660, 100), font, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
+            cv2.putText(full_frame, f"Total Score: {sum_reward[0]:.1f}", (660, 200), font, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
+            video_writer.write(full_frame)
                 
             with torch.no_grad():
                 if len(context_action) == 0:
@@ -100,6 +106,7 @@ def eval_episodes(config,
             # cv2.imshow("current_obs", process_visualize(obs[0]))
             # cv2.waitKey(10)
             # update current_obs, current_info and sum_reward
+            current_reward_0 = reward[0]
             sum_reward += reward
             current_obs = obs
 
@@ -125,6 +132,8 @@ def eval_episodes(config,
                                 score_table[f"evaluate/normalised_{algorithm}_score"].append(None)
 
                         sum_reward[i] = 0
+                        if i == 0:
+                            current_reward_0 = 0.0
                         episode_idx += 1
                         episode_pbar.update(1)  # Update the episode progress bar
                         if episode_idx == config.Evaluate.EpisodeNum:
@@ -136,7 +145,7 @@ def eval_episodes(config,
                                 if key != 'episode' and not np.array(value).any() == None:
                                     mean_val = np.mean(value)
                                     logger.log(key, mean_val, global_step=global_step)
-                                    if "normalised" in key:
+                                    if key == "evaluate/score":
                                         scores_str = ", ".join([f"{v:.4f}" for v in value])
                                         print(colorama.Fore.CYAN + f"{key}: " + colorama.Fore.YELLOW + f"[{scores_str}] (Mean: {mean_val:.4f})" + colorama.Style.RESET_ALL)
                             print("="*50 + "\n")
