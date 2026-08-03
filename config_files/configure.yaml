@@ -58,8 +58,8 @@ Models:
     Warmup_steps: 1000
     Dropout: 0.1
     Unimix_ratio: 0.01
-    SobelWeight: 0.1
-    SobelLossType: 'mse'
+    SobelWeight: 0.02
+    SobelLossType: 'l1'
     Weight_decay: 1.0e-4
     Adam:
       LearningRate: 1.0e-4
