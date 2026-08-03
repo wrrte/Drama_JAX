@@ -235,6 +235,43 @@ class MSELoss(nn.Module):
         return loss.mean()
 
 
+class SobelLoss(nn.Module):
+    def __init__(self, in_channels=3, loss_type='mse', device='cuda:0') -> None:
+        super().__init__()
+        self.loss_type = loss_type
+        self.in_channels = in_channels
+        
+        kernel_x = torch.tensor([[-1., 0., 1.], [-2., 0., 2.], [-1., 0., 1.]], dtype=torch.float32)
+        kernel_y = torch.tensor([[-1., -2., -1.], [0., 0., 0.], [1., 2., 1.]], dtype=torch.float32)
+        
+        self.weight_x = nn.Parameter(kernel_x.view(1, 1, 3, 3).repeat(in_channels, 1, 1, 1).to(device), requires_grad=False)
+        self.weight_y = nn.Parameter(kernel_y.view(1, 1, 3, 3).repeat(in_channels, 1, 1, 1).to(device), requires_grad=False)
+
+    def get_magnitude(self, x):
+        B, L, C, H, W = x.shape
+        x_flat = rearrange(x, 'b l c h w -> (b l) c h w')
+        
+        grad_x = F.conv2d(x_flat, self.weight_x, padding=1, groups=self.in_channels)
+        grad_y = F.conv2d(x_flat, self.weight_y, padding=1, groups=self.in_channels)
+        
+        magnitude = torch.sqrt(grad_x**2 + grad_y**2 + 1e-8)
+        return rearrange(magnitude, '(b l) c h w -> b l c h w', b=B, l=L)
+
+    def forward(self, obs_hat, obs):
+        mag_hat = self.get_magnitude(obs_hat)
+        mag_obs = self.get_magnitude(obs)
+        
+        if self.loss_type == 'mse':
+            distance = (mag_hat - mag_obs)**2
+        elif self.loss_type == 'l1':
+            distance = torch.abs(mag_hat - mag_obs)
+        else:
+            raise ValueError(f"Unknown sobel loss type: {self.loss_type}")
+            
+        loss = reduce(distance, "B L C H W -> B L", "sum")
+        return loss.mean()
+
+
 class CategoricalKLDivLossWithFreeBits(nn.Module):
     def __init__(self, free_bits) -> None:
         super().__init__()
@@ -366,6 +403,13 @@ class WorldModel(nn.Module):
         self.termination_decoder.apply(weight_init)
  
         self.mse_loss_func = MSELoss()
+        
+        self.sobel_weight = getattr(config.Models.WorldModel, "SobelWeight", 0.0)
+        sobel_loss_type = getattr(config.Models.WorldModel, "SobelLossType", "mse")
+        if self.sobel_weight > 0:
+            self.sobel_loss_func = SobelLoss(in_channels=config.Models.WorldModel.InChannels, loss_type=sobel_loss_type, device=device)
+        else:
+            self.sobel_loss_func = None
         self.ce_loss = nn.CrossEntropyLoss()
         self.bce_with_logits_loss_func = nn.BCEWithLogitsLoss()
         self.symlog_twohot_loss_func = SymLogTwoHotLoss(num_classes=255, lower_bound=-20, upper_bound=20)
@@ -648,6 +692,9 @@ class WorldModel(nn.Module):
 
         # env loss
         reconstruction_loss = self.mse_loss_func(obs_hat[:batch_size], obs[:batch_size])
+        if self.sobel_weight > 0 and self.sobel_loss_func is not None:
+            sobel_loss = self.sobel_loss_func(obs_hat[:batch_size], obs[:batch_size])
+            reconstruction_loss = reconstruction_loss + self.sobel_weight * sobel_loss
         reward_loss = self.symlog_twohot_loss_func(reward_hat, reward)
         termination_loss = self.bce_with_logits_loss_func(termination_hat, termination)
         # dyn-rep loss
