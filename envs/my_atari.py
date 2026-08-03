@@ -130,8 +130,8 @@ class Atari(gym.Env):
         _, info = self._env.reset()
         if self._noops:
             for _ in range(self._random.randint(self._noops)):
-                _, _, dead, _ = self._env.step(0)
-                if dead:
+                _, _, terminated, truncated, _ = self._env.step(0)
+                if terminated or truncated:
                     self._env.reset()
         self._last_lives = self._ale.lives()
         self._screen(self._buffer[0])
@@ -195,8 +195,8 @@ if __name__ == '__main__':
 
     for i in range(10000):
         action = env.action_space.sample()
-        obs, reward, done, info = env.step(action)
-        if done:
+        obs, reward, terminated, truncated, info = env.step(action)
+        if terminated or truncated:
             obs, info = env.reset()
     
     # End the timer

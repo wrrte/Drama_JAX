@@ -14,6 +14,12 @@
 
 
 
+dreamer는 world model이 더 정확하고 선명하지만 물고기에 쉽게 죽고, drama는 잠수부나 물고기가 깜빡거리지만 의외로 잘 살아남아서 산소바에 죽는 경우가 높다.
+STORM은?
+
+
+
+
 이와 관련하여 여러분과 만나서 조언을 듣고 싶다.
 
 
@@ -21,6 +27,48 @@
 작전계획이 첫 번째 전사자인 건 전쟁뿐만 아니라 연구도임을 깨달음.
 
 이제 한 달 반이 남았지만 포기하지 않고 해보겠다.
+
+
+
+
+
+# 필요한 데이터
+
+추천 구성 (강추)
+Fig 1
+
+Diver count vs value estimate
+
+기존 가설의 출발점
+
+하단 잠수부 개수가 다른 이미지들의 가치 그래프, 화면상의 잠수부 위치가 다른 이미지들의 가치 그래프
+
+
+
+Fig 2
+
+Latent cosine similarity matrix
+
+가설을 뒤집는 핵심 증거
+
+형태 (heatmap 추천)
+x축: diver count
+y축: diver count
+
+
+Fig 3
+
+Fish disappearance sequence
+
+새로운 병목의 시각적 증거
+
+
+
+Fig 4
+
+Training-time comparison
+
+실험 반복 가능성 확보
 
 
 

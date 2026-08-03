@@ -86,16 +86,7 @@ def eval_episodes(config,
     current_reward = [0.0] * config.Evaluate.NumEnvs
     with tqdm(total=config.Evaluate.EpisodeNum, desc="Evaluating episodes") as episode_pbar:
         while True:
-            for i in range(config.Evaluate.NumEnvs):
-                if env_writers[i] is not None:
-                    frame = process_visualize(current_obs[i])
-                    full_frame = np.zeros((640, 960, 3), dtype=np.uint8)
-                    full_frame[:, :640] = frame
-                    font = cv2.FONT_HERSHEY_SIMPLEX
-                    cv2.putText(full_frame, f"Step Score: {current_reward[i]:.1f}", (660, 100), font, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
-                    cv2.putText(full_frame, f"Total Score: {sum_reward[i]:.1f}", (660, 200), font, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
-                    env_writers[i].write(full_frame)
-                
+            current_value = [0.0] * config.Evaluate.NumEnvs
             with torch.no_grad():
                 if len(context_action) == 0:
                     action = vec_env.action_space.sample()
@@ -113,10 +104,27 @@ def eval_episodes(config,
                         # prior_flattened_sample, last_dist_feat = world_model.calc_last_dist_feat(context_latent[:,-1:], model_context_action[:,-1:], inference_params)
                         prior_flattened_sample, last_dist_feat = world_model.calc_last_dist_feat(context_latent, model_context_action)
                         # prior_flattened_sample, last_dist_feat = world_model.calc_last_post_feat(context_latent, model_context_action, current_obs_tensor)
-                    action = agent.sample_as_env_action(
-                        torch.cat([prior_flattened_sample, last_dist_feat], dim=-1),
-                        greedy=True
-                    )
+                    
+                    latent = torch.cat([prior_flattened_sample, last_dist_feat], dim=-1)
+                    action = agent.sample_as_env_action(latent, greedy=True)
+                    
+                    step_values = agent.value(latent)
+                    for i in range(config.Evaluate.NumEnvs):
+                        current_value[i] = step_values[i].item()
+
+            for i in range(config.Evaluate.NumEnvs):
+                if env_writers[i] is not None:
+                    frame = process_visualize(current_obs[i])
+                    full_frame = np.zeros((640, 960, 3), dtype=np.uint8)
+                    full_frame[:, :640] = frame
+                    font = cv2.FONT_HERSHEY_SIMPLEX
+                    cv2.putText(full_frame, f"Step Score: {current_reward[i]:.1f}", (660, 100), font, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
+                    cv2.putText(full_frame, f"Total Score: {sum_reward[i]:.1f}", (660, 200), font, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
+                    
+                    val_str = "N/A" if len(context_action) == 0 else f"{current_value[i]:.3f}"
+                    cv2.putText(full_frame, f"Critic Value: {val_str}", (660, 300), font, 0.8, (0, 255, 255), 2, cv2.LINE_AA)
+                    
+                    env_writers[i].write(full_frame)
 
             context_obs.append(rearrange(torch.Tensor(current_obs).to(world_model.device), "B H W C -> B 1 C H W")/255)
             context_action.append(action)
