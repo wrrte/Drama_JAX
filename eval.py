@@ -65,17 +65,36 @@ def eval_episodes(config,
     for algorithm in game_benchmark_df.index[2:]:
         score_table[f"evaluate/normalised_{algorithm}_score"] = []
         
-    current_reward_0 = 0.0
-    video_writer = cv2.VideoWriter("eval_video.mp4", cv2.VideoWriter_fourcc(*'mp4v'), 15, (960, 640))
+    import tempfile
+    temp_dir = tempfile.mkdtemp()
+    
+    env_writers = [None] * config.Evaluate.NumEnvs
+    global_episode_counter = 0
+    finished_episodes_files = []
+    
+    def start_writer(idx):
+        fname = os.path.join(temp_dir, f"temp_vid_{idx}.mp4")
+        writer = cv2.VideoWriter(fname, cv2.VideoWriter_fourcc(*'mp4v'), 15, (960, 640))
+        return writer, fname
+        
+    for i in range(config.Evaluate.NumEnvs):
+        if global_episode_counter < config.Evaluate.EpisodeNum:
+            env_writers[i], fname = start_writer(global_episode_counter)
+            finished_episodes_files.append(fname)
+            global_episode_counter += 1
+
+    current_reward = [0.0] * config.Evaluate.NumEnvs
     with tqdm(total=config.Evaluate.EpisodeNum, desc="Evaluating episodes") as episode_pbar:
         while True:
-            frame = process_visualize(current_obs[0])
-            full_frame = np.zeros((640, 960, 3), dtype=np.uint8)
-            full_frame[:, :640] = frame
-            font = cv2.FONT_HERSHEY_SIMPLEX
-            cv2.putText(full_frame, f"Step Score: {current_reward_0:.1f}", (660, 100), font, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
-            cv2.putText(full_frame, f"Total Score: {sum_reward[0]:.1f}", (660, 200), font, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
-            video_writer.write(full_frame)
+            for i in range(config.Evaluate.NumEnvs):
+                if env_writers[i] is not None:
+                    frame = process_visualize(current_obs[i])
+                    full_frame = np.zeros((640, 960, 3), dtype=np.uint8)
+                    full_frame[:, :640] = frame
+                    font = cv2.FONT_HERSHEY_SIMPLEX
+                    cv2.putText(full_frame, f"Step Score: {current_reward[i]:.1f}", (660, 100), font, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
+                    cv2.putText(full_frame, f"Total Score: {sum_reward[i]:.1f}", (660, 200), font, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
+                    env_writers[i].write(full_frame)
                 
             with torch.no_grad():
                 if len(context_action) == 0:
@@ -106,7 +125,8 @@ def eval_episodes(config,
             # cv2.imshow("current_obs", process_visualize(obs[0]))
             # cv2.waitKey(10)
             # update current_obs, current_info and sum_reward
-            current_reward_0 = reward[0]
+            for i in range(config.Evaluate.NumEnvs):
+                current_reward[i] = reward[i]
             sum_reward += reward
             current_obs = obs
 
@@ -132,12 +152,41 @@ def eval_episodes(config,
                                 score_table[f"evaluate/normalised_{algorithm}_score"].append(None)
 
                         sum_reward[i] = 0
-                        if i == 0:
-                            current_reward_0 = 0.0
+                        current_reward[i] = 0.0
+                        
+                        if env_writers[i] is not None:
+                            env_writers[i].release()
+                            env_writers[i] = None
+                            
+                        if global_episode_counter < config.Evaluate.EpisodeNum:
+                            env_writers[i], fname = start_writer(global_episode_counter)
+                            finished_episodes_files.append(fname)
+                            global_episode_counter += 1
+                            
                         episode_idx += 1
                         episode_pbar.update(1)  # Update the episode progress bar
                         if episode_idx == config.Evaluate.EpisodeNum:
-                            video_writer.release()
+                            for w in env_writers:
+                                if w is not None:
+                                    w.release()
+                            
+                            # Stitch videos sequentially
+                            final_writer = cv2.VideoWriter("eval_video.mp4", cv2.VideoWriter_fourcc(*'mp4v'), 15, (960, 640))
+                            for fname in finished_episodes_files:
+                                cap = cv2.VideoCapture(fname)
+                                while True:
+                                    ret, frame = cap.read()
+                                    if not ret:
+                                        break
+                                    final_writer.write(frame)
+                                cap.release()
+                                os.remove(fname)
+                            final_writer.release()
+                            try:
+                                os.rmdir(temp_dir)
+                            except:
+                                pass
+                            
                             print("\n[Video Saved] 'eval_video.mp4' has been saved locally.")
                             print("\n" + "="*50)
                             print(colorama.Fore.GREEN + "Evaluation Results (10 Episodes):" + colorama.Style.RESET_ALL)
@@ -160,8 +209,15 @@ if __name__ == "__main__":
     torch.backends.cudnn.allow_tf32 = True
     torch.backends.cudnn.benchmark = True
 
+    import sys
+    config_path = 'config_files/configure.yaml'
+    if '--config' in sys.argv:
+        idx = sys.argv.index('--config')
+        if idx + 1 < len(sys.argv):
+            config_path = sys.argv[idx + 1]
+
     # Read the YAML configuration file
-    with open('config_files/configure.yaml', 'r') as file:
+    with open(config_path, 'r') as file:
         config = yaml.safe_load(file)
    
     
@@ -169,6 +225,8 @@ if __name__ == "__main__":
     config = parse_args_and_update_config(config)   
 
     config = DotDict(config)
+    
+
     
     # parse arguments
     # print(colorama.Fore.RED + str(config) + colorama.Style.RESET_ALL)
@@ -202,7 +260,9 @@ if __name__ == "__main__":
     if (config.BasicSettings.Compile and os.name != "nt"):  # compilation is not supported on windows
         world_model = torch.compile(world_model)
         agent = torch.compile(agent)
-    logger = WandbLogger(config=config, project=config.Wandb.Init.Project, mode=config.Wandb.Init.Mode)
+        
+    # Disable wandb logging when evaluating directly
+    logger = WandbLogger(config=config, project=config.Wandb.Init.Project, mode="disabled")
     logdir = logger.run.dir
     
     scores_table = eval_episodes(

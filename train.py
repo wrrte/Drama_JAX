@@ -337,6 +337,7 @@ class DotDict(dict):
 # Function to parse and update config from arguments
 def parse_args_and_update_config(config, prefix=''):
     parser = argparse.ArgumentParser()
+    parser.add_argument('--config', type=str, default='config_files/configure.yaml', help='Path to the config file')
 
     # Map string dtype to torch dtype
     def dtype_mapper(dtype_str):
