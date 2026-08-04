@@ -702,14 +702,16 @@ class WorldModel(nn.Module):
         representation_loss, representation_real_kl_div = self.categorical_kl_div_loss(post_logits[:, 1:], prior_logits[:, :-1].detach())
         total_loss = reconstruction_loss + reward_loss + termination_loss + dynamics_loss + 0.1*representation_loss
         
-        return total_loss, reconstruction_loss, reward_loss, termination_loss, dynamics_loss, dynamics_real_kl_div, representation_loss, representation_real_kl_div, obs_hat
+        latent = torch.cat([flattened_sample, dist_feat], dim=-1)
+        
+        return total_loss, reconstruction_loss, reward_loss, termination_loss, dynamics_loss, dynamics_real_kl_div, representation_loss, representation_real_kl_div, obs_hat, latent
 
     @profile
     def update(self, obs, action, reward, termination, global_step, epoch_step, logger=None):
         self.train()
         with torch.autocast(device_type='cuda', dtype=torch.bfloat16, enabled=self.use_amp):
             total_loss, reconstruction_loss, reward_loss, termination_loss, dynamics_loss, \
-            dynamics_real_kl_div, representation_loss, representation_real_kl_div, obs_hat = self.compute_loss(obs, action, reward, termination)
+            dynamics_real_kl_div, representation_loss, representation_real_kl_div, obs_hat, latent = self.compute_loss(obs, action, reward, termination)
 
         # gradient descent
         self.scaler.scale(total_loss).backward()
@@ -735,13 +737,11 @@ class WorldModel(nn.Module):
             height, width, _ = final_image.shape
             scale_factor = 6
             final_image_resized = cv2.resize(final_image, (width * scale_factor, height * scale_factor), interpolation=cv2.INTER_NEAREST)
-            logger.log("Reconstruct/Reconstructed images", [final_image_resized], global_step=global_step)
+            logger.log("WorldModel/reconstruction_images", [final_image_resized], global_step=global_step)
                          
             
 
-        return  reconstruction_loss.item(), reward_loss.item(), termination_loss.item(), \
-                dynamics_loss.item(), dynamics_real_kl_div.item(), representation_loss.item(), \
-                representation_real_kl_div.item(), total_loss.item()
+        return reconstruction_loss.item(), reward_loss.item(), termination_loss.item(), dynamics_loss.item(), dynamics_real_kl_div.item(), representation_loss.item(), representation_real_kl_div.item(), total_loss.item(), latent
 
     @torch.no_grad()
     @profile

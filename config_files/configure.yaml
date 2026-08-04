@@ -16,6 +16,7 @@ Evaluate:
    NumEnvs: 10
    DuringTraining: True
    EverySteps: 1000
+   AfterSteps: 3000
 
 JointTrainAgent:
   SampleMaxSteps: 105000 # Just to make sure the last episode will finish, no training after 100k

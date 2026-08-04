@@ -87,6 +87,8 @@ class ReplayBuffer():
             action = torch.cat(action_list, dim=0)
             reward = torch.cat(reward_list, dim=0)
             termination = torch.cat(termination_list, dim=0)
+            
+            return obs, action, reward, termination, indexes
         else:
             obs_list, action_list, reward_list, termination_list = [], [], [], []
 
@@ -136,7 +138,7 @@ class ReplayBuffer():
             reward = torch.cat(reward_list, dim=0) if reward_list else torch.empty(0, device=self.device)
             termination = torch.cat(termination_list, dim=0) if termination_list else torch.empty(0, device=self.device)
 
-        return obs, action, reward, termination
+        return obs, action, reward, termination, indexes
 
     def append(self, obs, action, reward, termination):
         self.last_pointer = (self.last_pointer + 1) % (self.max_length)

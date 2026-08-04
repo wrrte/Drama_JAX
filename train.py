@@ -22,10 +22,12 @@ from envs.my_dmc import DMControl
 from eval import eval_episodes
 import warnings
 import ast
-
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from retrieval import RetrievalContextManager
 
 @profile
-def train_world_model_step(replay_buffer: ReplayBuffer, world_model: WorldModel, batch_size, batch_length, logger, epoch, global_step):
+def train_world_model_step(replay_buffer: ReplayBuffer, world_model: WorldModel, batch_size, batch_length, logger, epoch, global_step, agent=None, retrieval_manager=None):
     epoch_reconstruction_loss_list = []
     epoch_reward_loss_list = []
     epoch_termination_loss_list = []
@@ -34,11 +36,30 @@ def train_world_model_step(replay_buffer: ReplayBuffer, world_model: WorldModel,
     epoch_representation_loss_list = []
     epoch_representation_real_kl_div_list = []
     epoch_total_loss_list = []
+    
+    num_trig_pos = 0
+    num_trig_neg = 0
+    
     for e in range(epoch):
-        obs, action, reward, termination = replay_buffer.sample(batch_size, batch_length, imagine=False)
+        obs, action, reward, termination, indexes = replay_buffer.sample(batch_size, batch_length, imagine=False)
         reconstruction_loss, reward_loss, termination_loss, \
         dynamics_loss, dynamics_real_kl_div, representation_loss, \
-        representation_real_kl_div, total_loss = world_model.update(obs, action, reward, termination, global_step=global_step, epoch_step=e, logger=logger)
+        representation_real_kl_div, total_loss, latent = world_model.update(obs, action, reward, termination, global_step=global_step, epoch_step=e, logger=logger)
+        
+        if retrieval_manager is not None and agent is not None and retrieval_manager.enabled:
+            with torch.no_grad():
+                # Get agent value (v_t) from latent
+                # We must use agent.value to get the decoded scalar value instead of the raw symlog logits
+                v_t = agent.value(latent.detach()) # [B, T]
+            
+            base_indexes = indexes[:, 0]
+            if isinstance(base_indexes, torch.Tensor):
+                base_indexes = base_indexes.cpu().numpy()
+            base_envs = np.zeros_like(base_indexes)
+            
+            num_trig_pos, num_trig_neg = retrieval_manager.add_batch_transitions(
+                v_t, base_indexes, base_envs, replay_buffer.max_length, skip_len=8
+            )
 
         epoch_reconstruction_loss_list.append(reconstruction_loss)
         epoch_reward_loss_list.append(reward_loss)
@@ -57,42 +78,77 @@ def train_world_model_step(replay_buffer: ReplayBuffer, world_model: WorldModel,
         logger.log("WorldModel/dynamics_real_kl_div", np.mean(epoch_dynamics_real_kl_div_list), global_step=global_step)
         logger.log("WorldModel/representation_loss", np.mean(epoch_representation_loss_list), global_step=global_step)
         logger.log("WorldModel/representation_real_kl_div", np.mean(epoch_representation_real_kl_div_list), global_step=global_step)
-        logger.log("WorldModel/total_loss", np.mean(epoch_total_loss_list), global_step=global_step)    
+        logger.log("WorldModel/total_loss", np.mean(epoch_total_loss_list), global_step=global_step)
+        
+        if retrieval_manager is not None and retrieval_manager.enabled:
+            logger.log("Retrieval/triggered_anchors_step", num_trig_pos + num_trig_neg, global_step=global_step)
+
+    return num_trig_pos, num_trig_neg    
 
 @profile
 @torch.no_grad()
 def world_model_imagine_data(replay_buffer: ReplayBuffer,
                              world_model: WorldModel, agent: agents.ActorCriticAgent,
                              imagine_batch_size,
-                             imagine_context_length, imagine_batch_length):
+                             imagine_context_length, imagine_batch_length,
+                             retrieval_manager=None):
     '''
     Sample context from replay buffer, then imagine data with world model and agent
     '''
     world_model.eval()
     agent.eval()
-    sample_obs, sample_action, sample_reward, sample_termination = replay_buffer.sample(
-        imagine_batch_size, imagine_context_length, imagine=True, fetch_future_length=0)
+    
+    retrieved_count = 0
+    lazy_hit_rate = 0.0
+    
+    if retrieval_manager is not None and retrieval_manager.enabled:
+        # We need max_contexts to not exceed imagine_batch_size
+        max_anchors = imagine_batch_size // 4
+        ret_obs, ret_action, _, lazy_hit_rate, ret_indexes = retrieval_manager.retrieve_contexts(
+            replay_buffer, world_model, max_anchors, multiplier=5, target=5, max_contexts=imagine_batch_size
+        )
+        if ret_obs is not None:
+            retrieved_count = ret_obs.shape[0]
+            # Update imagined counter for retrieved frames
+            if len(ret_indexes) > 0:
+                ret_indexes_arr = np.array(ret_indexes)
+                replay_buffer.imagined_counter[ret_indexes_arr] += 1
+    
+    random_batch_size = max(1, imagine_batch_size - retrieved_count)
+    
+    sample_obs, sample_action, sample_reward, sample_termination, sample_indexes = replay_buffer.sample(
+        random_batch_size, imagine_context_length, imagine=True, fetch_future_length=0)
+        
+    if retrieved_count > 0:
+        sample_obs = torch.cat([sample_obs, ret_obs], dim=0)
+        sample_action = torch.cat([sample_action, ret_action], dim=0)
+
+    actual_batch_size = sample_obs.shape[0]
+
     if world_model.model == 'Transformer':
         latent, action, old_logits, context_latent, reward_hat, termination_hat = world_model.imagine_data(
             agent, sample_obs, sample_action,
-            imagine_batch_size=imagine_batch_size,
+            imagine_batch_size=actual_batch_size,
             imagine_context_length=imagine_context_length,
             imagine_batch_length=imagine_batch_length
         )
     elif world_model.model == 'Mamba' or world_model.model == 'Mamba2':
          latent, action, old_logits, context_latent, reward_hat, termination_hat = world_model.imagine_data2(
             agent, sample_obs, sample_action,
-            imagine_batch_size=imagine_batch_size,
+            imagine_batch_size=actual_batch_size,
             imagine_context_length=imagine_context_length,
             imagine_batch_length=imagine_batch_length
         )
-    return latent, action, old_logits, context_latent, sample_reward, sample_termination, reward_hat, termination_hat
+    return latent, action, old_logits, context_latent, sample_reward, sample_termination, reward_hat, termination_hat, lazy_hit_rate
 
 @profile
 def joint_train_world_model_agent(config, logdir,
                                   replay_buffer: ReplayBuffer,
                                   world_model: WorldModel, agent: agents.ActorCriticAgent,
                                   logger):
+    
+    latent_dim = config.Models.WorldModel.CategoricalDim * config.Models.WorldModel.ClassDim
+    retrieval_manager = RetrievalContextManager(latent_dim=latent_dim, num_envs=1, config=config.JointTrainAgent.get("Retrieval", {}), device=world_model.device)
     os.makedirs(f"{logdir}/ckpt", exist_ok=True)
 
 
@@ -143,6 +199,7 @@ def joint_train_world_model_agent(config, logdir,
     # sample and train
     for total_steps in tqdm(range(config.JointTrainAgent.SampleMaxSteps // config.JointTrainAgent.NumEnvs), desc='Training'):
         # sample part >>>
+        current_latent_for_hash = None
         if replay_buffer.ready('world_model'):
             world_model.eval()
             agent.eval()
@@ -151,6 +208,7 @@ def joint_train_world_model_agent(config, logdir,
                     action_numpy = env.action_space.sample()
                 else:
                     context_latent = world_model.encode_obs(context_obs_seq)
+                    current_latent_for_hash = context_latent[:, -1]
                     
                     if is_discrete:
                         model_context_action = rearrange(context_action_seq, "L -> 1 L")
@@ -200,6 +258,13 @@ def joint_train_world_model_agent(config, logdir,
 
         ob, reward, is_last, info = env.step(action_numpy)
         replay_buffer.append(current_ob, action_numpy, reward, info['is_terminal'])
+        
+        if replay_buffer.ready('world_model') and current_latent_for_hash is not None and retrieval_manager.enabled:
+            retrieval_manager.add_transition(
+                pointer=replay_buffer.last_pointer,
+                env_idx=0,
+                latent_b=current_latent_for_hash
+            )
 
         sum_reward += reward
         current_ob = ob
@@ -230,7 +295,9 @@ def joint_train_world_model_agent(config, logdir,
                 batch_length=config.JointTrainAgent.BatchLength,
                 logger=logger,
                 epoch=config.JointTrainAgent.TrainDynamicsEpoch,
-                global_step=total_steps
+                global_step=total_steps,
+                agent=agent,
+                retrieval_manager=retrieval_manager
             )
 
 
@@ -245,20 +312,24 @@ def joint_train_world_model_agent(config, logdir,
                 context_len = max(1, video_total_length - imagine_len)
                 num_videos = video_columns * video_temporal_length
                 
-                openloop_obs, openloop_action, _, _ = replay_buffer.sample(
+                openloop_obs, openloop_action, _, _, _ = replay_buffer.sample(
                     num_videos, context_len, imagine=True, fetch_future_length=imagine_len)
                 
                 world_model.log_openloop_video(
                     openloop_obs, openloop_action, context_len, imagine_len, logger, total_steps, video_columns=video_columns)
 
-            imagine_latent, agent_action, old_logits, context_latent, context_reward, context_termination, imagine_reward, imagine_termination = world_model_imagine_data(
+            imagine_latent, agent_action, old_logits, context_latent, context_reward, context_termination, imagine_reward, imagine_termination, lazy_hit_rate = world_model_imagine_data(
                 replay_buffer=replay_buffer,
                 world_model=world_model,
                 agent=agent,
                 imagine_batch_size=config.JointTrainAgent.ImagineBatchSize,
                 imagine_context_length=config.JointTrainAgent.ImagineContextLength,
-                imagine_batch_length=config.JointTrainAgent.ImagineBatchLength
+                imagine_batch_length=config.JointTrainAgent.ImagineBatchLength,
+                retrieval_manager=retrieval_manager
             )
+            
+            if retrieval_manager.enabled:
+                logger.log("Retrieval/lazy_hit_rate", lazy_hit_rate, global_step=total_steps)
 
             agent.update(
                 latent=imagine_latent,
@@ -273,7 +344,8 @@ def joint_train_world_model_agent(config, logdir,
                 global_step=total_steps
             )
 
-        if config.Evaluate.DuringTraining and total_steps % (config.Evaluate.EverySteps // config.JointTrainAgent.NumEnvs) == 0:
+        eval_after_steps = getattr(config.Evaluate, 'AfterSteps', 0) // config.JointTrainAgent.NumEnvs
+        if config.Evaluate.DuringTraining and total_steps >= eval_after_steps and total_steps % (config.Evaluate.EverySteps // config.JointTrainAgent.NumEnvs) == 0:
             _ = eval_episodes(config, world_model, agent, logger, total_steps)
         if config.JointTrainAgent.SaveModels and total_steps % (config.JointTrainAgent.SaveEverySteps // config.JointTrainAgent.NumEnvs) == 0:
             print(colorama.Fore.GREEN + f"Saving model at total steps {total_steps}" + colorama.Style.RESET_ALL)
