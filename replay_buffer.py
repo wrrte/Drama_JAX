@@ -15,6 +15,7 @@ class ReplayBuffer():
         self.device = device
         self.is_discrete = is_discrete  # NEW
         self.action_dim = action_dim  # NEW
+        self.num_envs = config.JointTrainAgent.NumEnvs
 
         # Determine action buffer shape
         if is_discrete:

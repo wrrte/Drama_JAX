@@ -4,6 +4,8 @@ import argparse
 import numpy as np
 from einops import rearrange
 import torch
+import torch._dynamo
+torch._dynamo.config.cache_size_limit = 256
 from collections import deque
 from tqdm import tqdm
 import colorama
