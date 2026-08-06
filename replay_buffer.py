@@ -123,7 +123,7 @@ class ReplayBuffer():
                 reward_seq = self.reward_buffer[indexes]
                 termination_seq = self.termination_buffer[indexes]
 
-                obs_seq = torch.from_numpy(obs_seq).float().to(self.device) / 255
+                obs_seq = torch.from_numpy(obs_seq).to(self.device).float() / 255
                 obs_seq = rearrange(obs_seq, "B T H W C -> B T C H W")
                 action_seq = torch.from_numpy(action_seq).to(self.device)
                 reward_seq = torch.from_numpy(reward_seq).to(self.device)

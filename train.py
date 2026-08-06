@@ -194,7 +194,7 @@ def joint_train_world_model_agent(config, logdir,
     
     sum_reward = 0
     current_ob, info = env.reset()
-    context_obs_seq = None
+    context_latent = None
     context_action_seq = None
     max_context_len = config.JointTrainAgent.RealityContextLength
 
@@ -209,7 +209,6 @@ def joint_train_world_model_agent(config, logdir,
                 if context_action_seq is None:
                     action_numpy = env.action_space.sample()
                 else:
-                    context_latent = world_model.encode_obs(context_obs_seq)
                     current_latent_for_hash = context_latent[:, -1]
                     
                     if is_discrete:
@@ -230,13 +229,15 @@ def joint_train_world_model_agent(config, logdir,
                     else:
                         action_numpy = action_tensor.cpu().numpy()
 
-            new_ob = rearrange(torch.Tensor(current_ob).to(world_model.device), "H W C -> 1 1 C H W") / 255.0
-            if context_obs_seq is None:
-                context_obs_seq = new_ob
+            new_ob = rearrange(torch.from_numpy(current_ob).to(world_model.device).float(), "H W C -> 1 1 C H W") / 255.0
+            with torch.no_grad():
+                new_latent = world_model.encode_obs(new_ob)
+            if context_latent is None:
+                context_latent = new_latent
             else:
-                context_obs_seq = torch.cat([context_obs_seq, new_ob], dim=1)
-                if context_obs_seq.shape[1] > max_context_len:
-                    context_obs_seq = context_obs_seq[:, 1:]
+                context_latent = torch.cat([context_latent, new_latent], dim=1)
+                if context_latent.shape[1] > max_context_len:
+                    context_latent = context_latent[:, 1:]
             
             if is_discrete:
                 if context_action_seq is None:
@@ -284,7 +285,7 @@ def joint_train_world_model_agent(config, logdir,
             
             sum_reward = 0
             ob, info = env.reset()
-            context_obs_seq = None
+            context_latent = None
             context_action_seq = None
 
 
@@ -320,7 +321,7 @@ def joint_train_world_model_agent(config, logdir,
                 world_model.log_openloop_video(
                     openloop_obs, openloop_action, context_len, imagine_len, logger, total_steps, video_columns=video_columns)
 
-            imagine_latent, agent_action, old_logits, context_latent, context_reward, context_termination, imagine_reward, imagine_termination, lazy_hit_rate = world_model_imagine_data(
+            imagine_latent, agent_action, old_logits, train_context_latent, context_reward, context_termination, imagine_reward, imagine_termination, lazy_hit_rate = world_model_imagine_data(
                 replay_buffer=replay_buffer,
                 world_model=world_model,
                 agent=agent,
@@ -337,7 +338,7 @@ def joint_train_world_model_agent(config, logdir,
                 latent=imagine_latent,
                 action=agent_action,
                 old_logits=old_logits,
-                context_latent=context_latent,
+                context_latent=train_context_latent,
                 context_reward=context_reward,
                 context_termination=context_termination,
                 reward=imagine_reward,

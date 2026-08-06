@@ -14,7 +14,7 @@ BasicSettings:
 Evaluate:
    EpisodeNum: 10
    NumEnvs: 10
-   DuringTraining: True
+   DuringTraining: False
    EverySteps: 1000
    AfterSteps: 3000
 

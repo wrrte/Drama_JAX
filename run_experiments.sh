@@ -11,13 +11,6 @@ export CUDA_LAUNCH_BLOCKING=1
 export MUJOCO_GL="egl"
 
 
-python train.py --BasicSettings.Env_name "ALE/Seaquest-v5"
-
-python train.py --BasicSettings.Env_name "ALE/Hero-v5"
-python train.py --BasicSettings.Env_name "ALE/Frostbite-v5"
-
-
-python train.py --BasicSettings.Env_name "ALE/ChopperCommand-v5" # dreamerV3가 drama보다 점수가 낮은 게임
 python train.py --BasicSettings.Env_name "ALE/BankHeist-v5"  # dreamerV3가 drama보다 점수가 높은 게임
 python train.py --BasicSettings.Env_name "ALE/PrivateEye-v5" # dreamerV3가 drama보다 점수가 높은 게임
 
@@ -35,3 +28,11 @@ python train.py --BasicSettings.Env_name "ALE/MsPacman-v5"       # dreamerV3가 
 
 python train.py --BasicSettings.Env_name "ALE/Alien-v5"
 python train.py --BasicSettings.Env_name "ALE/Amidar-v5"
+
+python train.py --BasicSettings.Env_name "ALE/Seaquest-v5"
+
+python train.py --BasicSettings.Env_name "ALE/Hero-v5"
+python train.py --BasicSettings.Env_name "ALE/Frostbite-v5"
+
+
+python train.py --BasicSettings.Env_name "ALE/ChopperCommand-v5" # dreamerV3가 drama보다 점수가 낮은 게임
