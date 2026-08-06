@@ -84,6 +84,8 @@ def train_world_model_step(replay_buffer: ReplayBuffer, world_model: WorldModel,
         
         if retrieval_manager is not None and retrieval_manager.enabled:
             logger.log("Retrieval/triggered_anchors_step", num_trig_pos + num_trig_neg, global_step=global_step)
+            logger.log("Retrieval/triggered_anchors_step_pos", num_trig_pos, global_step=global_step)
+            logger.log("Retrieval/triggered_anchors_step_neg", num_trig_neg, global_step=global_step)
 
     return num_trig_pos, num_trig_neg    
 
@@ -93,7 +95,7 @@ def world_model_imagine_data(replay_buffer: ReplayBuffer,
                              world_model: WorldModel, agent: agents.ActorCriticAgent,
                              imagine_batch_size,
                              imagine_context_length, imagine_batch_length,
-                             retrieval_manager=None):
+                             retrieval_manager=None, logger=None, global_step=0):
     '''
     Sample context from replay buffer, then imagine data with world model and agent
     '''
@@ -106,9 +108,11 @@ def world_model_imagine_data(replay_buffer: ReplayBuffer,
     if retrieval_manager is not None and retrieval_manager.enabled:
         # We need max_contexts to not exceed imagine_batch_size
         max_anchors = imagine_batch_size // 4
-        ret_obs, ret_action, _, lazy_hit_rate, ret_indexes = retrieval_manager.retrieve_contexts(
+        ret_obs, ret_action, candidates_before_max, lazy_hit_rate, ret_indexes = retrieval_manager.retrieve_contexts(
             replay_buffer, world_model, max_anchors, multiplier=5, target=5, max_contexts=imagine_batch_size
         )
+        if logger is not None:
+            logger.log("Retrieval/candidates_before_max", candidates_before_max, global_step=global_step)
         if ret_obs is not None:
             retrieved_count = ret_obs.shape[0]
             # Update imagined counter for retrieved frames
@@ -124,6 +128,19 @@ def world_model_imagine_data(replay_buffer: ReplayBuffer,
     if retrieved_count > 0:
         sample_obs = torch.cat([sample_obs, ret_obs], dim=0)
         sample_action = torch.cat([sample_action, ret_action], dim=0)
+        if logger is not None:
+            logger.log("Retrieval/retrieved_contexts", retrieved_count, global_step=global_step)
+            logger.log("Retrieval/active_anchors_queue", retrieval_manager.anchor_count.item(), global_step=global_step)
+            
+            active_mask = retrieval_manager.bucket_lens > 0
+            active_sizes = retrieval_manager.bucket_lens[active_mask]
+            
+            if len(active_sizes) > 0:
+                sizes = active_sizes.cpu().numpy()
+                avg_size = np.mean(sizes)
+                logger.log("Retrieval/avg_bucket_size", avg_size, global_step=global_step)
+                logger.log("Retrieval/num_active_buckets", len(sizes), global_step=global_step)
+                logger.log("Retrieval/bucket_size_hist", sizes, global_step=global_step)
 
     actual_batch_size = sample_obs.shape[0]
 
@@ -150,8 +167,11 @@ def joint_train_world_model_agent(config, logdir,
                                   logger):
     
     latent_dim = config.Models.WorldModel.CategoricalDim * config.Models.WorldModel.ClassDim
-    retrieval_manager = RetrievalContextManager(latent_dim=latent_dim, num_envs=1, config=config.JointTrainAgent.get("Retrieval", {}), device=world_model.device)
+    retrieval_config = config.JointTrainAgent.get("Retrieval", {})
+    retrieval_manager = RetrievalContextManager(latent_dim=latent_dim, num_envs=1, config=retrieval_config, device=world_model.device)
     os.makedirs(f"{logdir}/ckpt", exist_ok=True)
+    
+    last_rebuild_step = -retrieval_config.get("global_rebuild_cooldown", 2000)
 
 
     if config.BasicSettings.Env_name.startswith('ALE'):
@@ -328,7 +348,9 @@ def joint_train_world_model_agent(config, logdir,
                 imagine_batch_size=config.JointTrainAgent.ImagineBatchSize,
                 imagine_context_length=config.JointTrainAgent.ImagineContextLength,
                 imagine_batch_length=config.JointTrainAgent.ImagineBatchLength,
-                retrieval_manager=retrieval_manager
+                retrieval_manager=retrieval_manager,
+                logger=logger,
+                global_step=total_steps
             )
             
             if retrieval_manager.enabled:
@@ -346,6 +368,18 @@ def joint_train_world_model_agent(config, logdir,
                 logger=logger,
                 global_step=total_steps
             )
+
+            if retrieval_manager.enabled:
+                gr_enabled = retrieval_config.get("global_rebuild_enable", True)
+                gr_threshold = retrieval_config.get("global_rebuild_threshold", 0.2)
+                gr_cooldown = retrieval_config.get("global_rebuild_cooldown", 2000)
+                
+                if gr_enabled and lazy_hit_rate < gr_threshold and total_steps - last_rebuild_step >= gr_cooldown:
+                    retrieval_manager.rebuild_all_hash_buckets(replay_buffer, world_model, chunk_size=1024)
+                    last_rebuild_step = total_steps
+                    logger.log("Retrieval/global_rebuild_triggered", 1.0, global_step=total_steps)
+                else:
+                    logger.log("Retrieval/global_rebuild_triggered", 0.0, global_step=total_steps)
 
         eval_after_steps = getattr(config.Evaluate, 'AfterSteps', 0) // config.JointTrainAgent.NumEnvs
         if config.Evaluate.DuringTraining and total_steps >= eval_after_steps and total_steps % (config.Evaluate.EverySteps // config.JointTrainAgent.NumEnvs) == 0:
